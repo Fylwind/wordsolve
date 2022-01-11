@@ -670,6 +670,12 @@ pub fn main() -> io::Result<()> {
         return Err(error("no solution candidates remain"));
     }
     database.solutions.sort();
+    println!(
+        "{} {} {}",
+        database.solutions.len(),
+        database.nonsolutions.len(),
+        database.solutions.len() + database.nonsolutions.len()
+    );
     database.nonsolutions.sort();
 
     eprintln!("Building matrix...");

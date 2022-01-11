@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>wordsolve</title>
+    <link href="style.css" rel="stylesheet"/>
+  </head>
+  <body>
+    <noscript class="error">Error: JavaScript is not enabled.</noscript>
+    <section id="uploader">
+      <p><label for="word-list-input">Word list:</label></p>
+      <p><input id="word-list-input" type="file"/></p>
+      <p><button id="upload-word-list-button">Upload word list</button></p>
+      <p class="instructions">The word list should be a plain UTF-8 text file with one word per line. Words that are not 5 letters are ignored.</p>
+      <p class="instructions">Advanced feature: You can prefix words with "!" to indicate that they are permitted as guesses, but not as solutions.</p>
+      <p class="instructions">No data will be transmitted to the server. The word list will be cached locally in your browser.</p>
+      <p id="word-list-log" class="log">Please upload a word list first. Example: <a href="http://pages.cs.wisc.edu/~o-laughl/csw15.txt">http://pages.cs.wisc.edu/~o-laughl/csw15.txt</a></p>
+    </section>
+    <section id="solver">
+      <p><label for="guesses-textarea">Guesses:</label></p>
+      <p><textarea id="guesses-textarea" rows="6" cols="12"></textarea></p>
+      <p><button id="solve-button">Find strategy</button></p>
+      <p id="solve-log" class="log">Click "Find strategy" to begin.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Recommended next query</th>
+            <th>kMax</th>
+            <th>kAvg</th>
+            <th>dMax</th>
+            <th>dAvg</th>
+          </tr>
+        </thead>
+        <tbody id="queries">
+          <tr>
+            <td>...</td>
+          </tr>
+        </tbody>
+      </table>
+      <table>
+        <thead>
+          <tr><th>Candidate solutions</th></tr>
+        </thead>
+        <tbody id="candidates">
+          <tr><td>...</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <script src="script.js"></script>
+  </body>
+</html>
