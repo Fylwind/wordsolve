@@ -1,13 +1,16 @@
 "use strict";
 
 importScripts('./pkg/wordsolve.js');
+const lib = wasm_bindgen;
+const initLib = lib('./pkg/wordsolve_bg.wasm');
 
-async function main() {
-    await wasm_bindgen('./pkg/wordsolve_bg.wasm');
-    console.log("WASM", wasm_bindgen.greet("WebAsm"));
+function js_log(message) {
+    logAppend(message);
 }
 
-main();
+function js_now() {
+    return performance.now();
+}
 
 function packWord(word) {
     if (!/^[a-z]{5}$/.test(word)) {
@@ -307,7 +310,12 @@ function dumpCandidates(p, candidates) {
 }
 
 function runSolve(data) {
-    const preprocessed = preprocess(data.words);
+    log("Preprocessing...");
+    console.time("preprocess");
+//    const preprocessed = preprocess(data.words);
+    const preprocessed = lib.preprocess(data.words.join(","));
+    console.timeEnd("preprocess");
+    return;
     const candidates = range(preprocessed.candidates.length);
     log("Filtering...");
     const filteredCandidates = applyPriorGuesses(
@@ -325,6 +333,13 @@ function runSolve(data) {
     );
 }
 
-onmessage = e => ({
-    runSolve,
-})[e.data.cmd](e.data);
+async function main() {
+    log("Initializing...");
+    await initLib;
+    log("Click 'Find strategy' to begin.");
+    onmessage = e => ({
+        runSolve,
+    })[e.data.cmd](e.data);
+}
+
+main();

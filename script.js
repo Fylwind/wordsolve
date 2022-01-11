@@ -112,7 +112,14 @@ function loadSolver(runner, wordList) {
         log.innerText = data.message;
     };
     runner.commands.logAppend = data => {
-        log.innerText += "\n" + data.message;
+        const message = data.message;
+        if (message.startsWith("\x1b[2K\r")) {
+            log.innerText =
+                log.innerText.slice(0, log.innerText.lastIndexOf("\n") + 1)
+                + message.slice(5);
+        } else {
+            log.innerText += message + "\n";
+        }
     };
     runner.commands.clearQueries = data => {
         for (const i = queriesTable.length - 1; i > 0; --i) {
