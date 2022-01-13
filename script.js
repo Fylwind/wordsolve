@@ -130,7 +130,7 @@ function loadSolver(runner, wordList) {
     runner.commands.appendQuery = data => {
         appendTableRow(queriesTable, data.query);
     };
-    runner.commands.setCandidates = data => {
+    runner.commands["SetCandidates"] = data => {
         clearTable(candidatesTable);
         const fragment = new DocumentFragment();
         for (const [i, candidate] of data.candidates.entries()) {
@@ -140,9 +140,9 @@ function loadSolver(runner, wordList) {
     };
     button.addEventListener("click", () => {
         clearTable(queriesTable);
-        log.innerText = "Solving...";
+        log.innerText = "";
         runner.worker.postMessage({
-            cmd: "runSolve",
+            cmd: "RunSolve",
             words: wordList.words,
             guesses: textarea.value,
         });

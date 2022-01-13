@@ -6,35 +6,24 @@ use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;
 use js_sys;
 use lazy_static::lazy_static;
-use serde::{Deserialize, Serialize};
 use static_assertions::const_assert;
 use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::io::{BufRead, Write};
 use std::{cmp, fmt, io, str, time};
-use wasm_bindgen::prelude::wasm_bindgen;
 
-#[wasm_bindgen]
-extern "C" {
-    fn js_log(s: &str);
+mod js;
 
-    fn js_now() -> f64;
-}
-
-#[wasm_bindgen]
-pub fn solve(words: &str, guesses: &str) {
-    let log = JsLog;
-
-    let words: Vec<&str> = words.split(",").collect();
+fn solve(words: &[String], guesses: &str, log: &dyn Log) {
     let nonsolutions = words
         .iter()
         .filter(|w| w.starts_with("!"))
-        .map(|&w| w.strip_prefix('!').unwrap_or(w).to_owned())
+        .map(|w| w.strip_prefix('!').unwrap_or(w).to_owned())
         .collect();
     let candidates = words
         .iter()
         .filter(|w| !w.starts_with("!"))
-        .map(|&w| w.to_owned())
+        .cloned()
         .collect();
     let mut database = Database {
         solutions: candidates,
@@ -43,6 +32,11 @@ pub fn solve(words: &str, guesses: &str) {
     log.log("Preprocessing...");
     let guesses = parse_guesses(guesses, "\n").unwrap();
     database.solutions = filter_candidates(&guesses, &database.solutions);
+
+    let mut candidates = database.solutions.clone();
+    candidates.sort();
+    js::post_message(&js::OutMessage::SetCandidates { candidates });
+
     let matrix = Matrix::build(&database);
 
     let candidates: Vec<WordId> = (0..database.solutions.len())
@@ -57,14 +51,7 @@ pub fn solve(words: &str, guesses: &str) {
     let mut out_file = io::sink();
     log.log("Solving...");
     solver
-        .dump_strategy(
-            &matrix,
-            &queries,
-            &queries,
-            &candidates,
-            &mut out_file,
-            &JsLog,
-        )
+        .dump_strategy(&matrix, &queries, &queries, &candidates, &mut out_file, log)
         .unwrap();
 }
 
@@ -574,15 +561,6 @@ pub trait Log {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct JsLog;
-
-impl Log for JsLog {
-    fn log(&self, message: &str) {
-        js_log(message);
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
 pub struct StderrLog;
 
 impl Log for StderrLog {
@@ -614,7 +592,7 @@ impl DepthStats {
 
 #[cfg(target_arch = "wasm32")]
 fn now() -> f64 {
-    js_now()
+    js::js_now()
 }
 
 lazy_static! {

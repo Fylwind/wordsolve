@@ -280,65 +280,11 @@ function solve(p, queries, candidates) {
     return output.join("\n");
 }
 
-function range(n) {
-    return new Array(n).fill(0).map((_, i) => i);
-}
-
-function applyPriorGuesses(p, guesses, candidates) {
-    const packedGuesses = guesses.map(guess => ({
-        query: packWord(guess.query),
-        response: packResponse(guess.response),
-    }));
-    return candidates.filter(index => {
-        const candidate = p.candidates[index];
-        for (const {query, response} of packedGuesses) {
-            if (computeResponse(query, candidate) != response) {
-                return false;
-            }
-        }
-        return true;
-    });
-}
-
-function dumpCandidates(p, candidates) {
-    const words = candidates.map(index => unpackWord(p.candidates[index]));
-    words.sort();
-    postMessage({
-        cmd: "setCandidates",
-        candidates: words,
-    });
-}
-
-function runSolve(data) {
-    console.time("runSolve");
-//    const preprocessed = preprocess(data.words);
-    lib.solve(data.words.join(","), data.guesses);
-    console.timeEnd("runSolve");
-    return;
-    // const candidates = range(preprocessed.candidates.length);
-    // log("Filtering...");
-    // const filteredCandidates = applyPriorGuesses(
-    //     preprocessed,
-    //     data.guesses,
-    //     candidates,
-    // );
-    // preprocessed.counter = 0;
-    // dumpCandidates(preprocessed, filteredCandidates);
-    // log("Solving...");
-    // solve(
-    //     preprocessed,
-    //     range(preprocessed.queries.length),
-    //     filteredCandidates,
-    // );
-}
-
 async function main() {
     log("Initializing...");
     await initLib;
     log("Click 'Find strategy' to begin.");
-    onmessage = e => ({
-        runSolve,
-    })[e.data.cmd](e.data);
+    onmessage = e => lib.onmessage(e.data);
 }
 
 main();
