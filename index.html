@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>wordsolve</title>
+    <link href="style.css" rel="stylesheet"/>
+  </head>
+  <body>
+    <noscript class="error">Error: JavaScript is not enabled.</noscript>
+    <section id="status-bar">
+      <progress id="progress-bar" value="0"></progress>
+      <label id="status-message" for="progress-bar">&nbsp;</label>
+    </section>
+    <section id="uploader">
+      <label for="word-list-input">Word list:</label>
+      <input id="word-list-input" type="file"/>
+      <button id="upload-word-list-button">Upload word list</button>
+      <details>
+        <summary>Help</summary>
+        <p>Before you can begin, you need to upload a word list.</p>
+        <p>The word list should be a plain text file (.txt) with one word per line, encoded as UTF-8. Words that are not 5 letters are ignored.</p>
+        <p>Word lists can be found online. Here is an example: <a href="http://pages.cs.wisc.edu/~o-laughl/csw15.txt">http://pages.cs.wisc.edu/~o-laughl/csw15.txt</a></p>
+        <p>Advanced feature: You can prefix words with "!" to indicate that they are permitted as guesses, but not as solutions.</p>
+        <p>No data will be transmitted to the server. The word list will be cached locally in your browser.</p>
+      </details>
+    </section>
+    <section id="solver">
+      <label for="guesses-textarea">Guesses:</label><br/>
+      <textarea id="guesses-textarea" rows="6" cols="12"></textarea><br/>
+      <label>Number of root queries: <input id="num-roots" value="1"/></label><br/>
+      <label>"dk" truncation cutoff: <input id="dk-trunc" value="0.05"/></label><br/>
+      <button id="solve-button">Find strategy</button>
+      <details>
+        <summary>Help</summary>
+        <p>Example of how to enter guesses:</p>
+        <pre><code>raise 01001
+metal 01010
+annex 20020</code></pre>
+        <ul>
+          <li><span style="background: lightgrey">0</span> = Letter is absent</li>
+          <li><span style="background: yellow">1</span> = Letter is present but at wrong location</li>
+          <li><span style="background: lime">2</span> = Letter is at the correct location</li>
+        </ul>
+        <p>Parameters:</p>
+        <dl>
+          <dt>Number of root queries<dt>
+            <dd>[not yet implemented] An integer that controls how many root queries to try. Must be between 1 and the number of queries. Performance cost will increase roughly proportionally to this number.</dd>
+          <dt>"dk" truncation cutoff<dt>
+            <dd>A nonnegative number to control the degree of branching in the search tree. Choose 0 to minimize branching (fastest). Choose a larger number (say 0.4) to improve optimality but be warned that it can be very slow with large word lists (> 2k).</dd>
+        </dl>
+      </details>
+    </section>
+    <section id="result">
+      <details>
+        <summary>List of candidate solutions (<span id="num-candidates">0</span>)</summary>
+        <table>
+          <thead>
+            <tr><th>Candidate</th></tr>
+          </thead>
+          <tbody id="candidates"></tbody>
+        </table>
+      </details>
+      <table>
+        <thead>
+          <tr>
+            <th colspan="3">Depth</th>
+            <th rowspan="2">Recommended query</th>
+          </tr>
+          <tr>
+            <th>Max</th>
+            <th>Average</th>
+            <th>Histogram</th>
+          </tr>
+        </thead>
+        <tbody id="queries"></tbody>
+      </table>
+    </section>
+    <script src="script.js"></script>
+  </body>
+</html>

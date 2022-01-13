@@ -1,0 +1,79 @@
+html {
+    font-family: sans-serif;
+}
+
+body {
+    margin: 0;
+}
+
+p, pre, dl {
+    margin: 8px;
+}
+
+pre {
+    background: #f0f0f0;
+    padding: 8px;
+}
+
+#uploader label, #solver label {
+    font-weight: bold;
+}
+
+.instructions {
+    font-size: small;
+}
+
+.log {
+    background: #ddd;
+    padding: 8px;
+}
+
+.error {
+    color: red;
+    font-weight: bold;
+}
+
+section {
+    padding: 10px;
+}
+
+#status-bar progress {
+    width: 100%;
+}
+
+#status-bar label {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#uploader {
+    background: #ccc;
+}
+
+#result > * {
+    margin-bottom: 10px;
+}
+
+#result table {
+    border: 1px solid grey;
+    margin-right: 5px;
+}
+
+#result table td {
+    vertical-align: top;
+}
+
+#result table details {
+    padding: 8px;
+}
+
+#result td, #result th {
+    padding: 5px;
+}
+
+#result th {
+    background: #f0f0f0;
+}
