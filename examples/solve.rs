@@ -35,13 +35,8 @@ pub fn main() -> io::Result<()> {
 
     let mut file = io::BufReader::new(fs::File::open(args.database)?);
     let mut database = Database::read(&mut file)?;
-    for entry in args.filters.split(";") {
-        if entry.trim().is_empty() {
-            continue;
-        }
-        let (query, response) = wordsolve::parse_word_response(&entry)?;
-        database.solutions = wordsolve::filter_candidates(query, response, &database.solutions);
-    }
+    let guesses = wordsolve::parse_guesses(&args.filters, ";")?;
+    database.solutions = wordsolve::filter_candidates(&guesses, &database.solutions);
     if let Some(limit) = args.truncate_solutions {
         assert!(limit <= database.solutions.len());
         database.solutions.resize(limit, Default::default());

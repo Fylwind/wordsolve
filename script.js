@@ -139,19 +139,12 @@ function loadSolver(runner, wordList) {
         candidatesTable.appendChild(fragment);
     };
     button.addEventListener("click", () => {
-        let guesses;
-        try {
-            guesses = parseGuesses(textarea.value);
-        } catch (e) {
-            log.innerText = e;
-            return;
-        }
         clearTable(queriesTable);
         log.innerText = "Solving...";
         runner.worker.postMessage({
             cmd: "runSolve",
             words: wordList.words,
-            guesses,
+            guesses: textarea.value,
         });
     });
 }

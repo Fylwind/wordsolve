@@ -310,27 +310,26 @@ function dumpCandidates(p, candidates) {
 }
 
 function runSolve(data) {
-    log("Preprocessing...");
-    console.time("preprocess");
+    console.time("runSolve");
 //    const preprocessed = preprocess(data.words);
-    const preprocessed = lib.preprocess(data.words.join(","));
-    console.timeEnd("preprocess");
+    lib.solve(data.words.join(","), data.guesses);
+    console.timeEnd("runSolve");
     return;
-    const candidates = range(preprocessed.candidates.length);
-    log("Filtering...");
-    const filteredCandidates = applyPriorGuesses(
-        preprocessed,
-        data.guesses,
-        candidates,
-    );
-    preprocessed.counter = 0;
-    dumpCandidates(preprocessed, filteredCandidates);
-    log("Solving...");
-    solve(
-        preprocessed,
-        range(preprocessed.queries.length),
-        filteredCandidates,
-    );
+    // const candidates = range(preprocessed.candidates.length);
+    // log("Filtering...");
+    // const filteredCandidates = applyPriorGuesses(
+    //     preprocessed,
+    //     data.guesses,
+    //     candidates,
+    // );
+    // preprocessed.counter = 0;
+    // dumpCandidates(preprocessed, filteredCandidates);
+    // log("Solving...");
+    // solve(
+    //     preprocessed,
+    //     range(preprocessed.queries.length),
+    //     filteredCandidates,
+    // );
 }
 
 async function main() {

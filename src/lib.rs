@@ -22,7 +22,9 @@ extern "C" {
 }
 
 #[wasm_bindgen]
-pub fn preprocess(words: &str) -> js_sys::Uint8Array {
+pub fn solve(words: &str, guesses: &str) {
+    let log = JsLog;
+
     let words: Vec<&str> = words.split(",").collect();
     let nonsolutions = words
         .iter()
@@ -34,10 +36,13 @@ pub fn preprocess(words: &str) -> js_sys::Uint8Array {
         .filter(|w| !w.starts_with("!"))
         .map(|&w| w.to_owned())
         .collect();
-    let database = Database {
+    let mut database = Database {
         solutions: candidates,
         nonsolutions: nonsolutions,
     };
+    log.log("Preprocessing...");
+    let guesses = parse_guesses(guesses, "\n").unwrap();
+    database.solutions = filter_candidates(&guesses, &database.solutions);
     let matrix = Matrix::build(&database);
 
     let candidates: Vec<WordId> = (0..database.solutions.len())
@@ -50,8 +55,7 @@ pub fn preprocess(words: &str) -> js_sys::Uint8Array {
         max_branching: 1,
     };
     let mut out_file = io::sink();
-    let log = JsLog;
-    log.log("Solving...?");
+    log.log("Solving...");
     solver
         .dump_strategy(
             &matrix,
@@ -62,9 +66,6 @@ pub fn preprocess(words: &str) -> js_sys::Uint8Array {
             &JsLog,
         )
         .unwrap();
-
-    let responses: Vec<u8> = matrix.responses.into_iter().map(|r| r.0).collect();
-    return js_sys::Uint8Array::from(&responses as &[u8]);
 }
 
 fn error(message: &str) -> io::Error {
@@ -318,19 +319,30 @@ impl Database {
     }
 }
 
-pub fn parse_word_response(s: &str) -> io::Result<(&str, Response)> {
-    let fields: Vec<&str> = s.trim().split_whitespace().collect();
-    if fields.len() != 2 {
-        return Err(error("wrong number of fields"));
+pub fn parse_guesses<'a>(s: &'a str, separator: &str) -> io::Result<Vec<(&'a str, Response)>> {
+    let mut guesses = Vec::default();
+    for entry in s.split_terminator(separator) {
+        if entry.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = entry.trim().split_whitespace().collect();
+        if fields.len() != 2 {
+            return Err(error("wrong number of fields"));
+        }
+        guesses.push((fields[0], Response::try_from(fields[1])?));
     }
-    Ok((fields[0], Response::try_from(fields[1])?))
+    Ok(guesses)
 }
 
-pub fn filter_candidates(word: &str, response: Response, candidates: &[String]) -> Vec<String> {
+pub fn filter_candidates(guesses: &[(&str, Response)], candidates: &[String]) -> Vec<String> {
     candidates
         .iter()
         .cloned()
-        .filter(|candidate| Response::compute(word, candidate) == response)
+        .filter(|candidate| {
+            guesses
+                .iter()
+                .all(|&(query, response)| Response::compute(query, candidate) == response)
+        })
         .collect()
 }
 
