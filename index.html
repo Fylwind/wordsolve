@@ -15,13 +15,22 @@
       <p class="instructions">The word list should be a plain UTF-8 text file with one word per line. Words that are not 5 letters are ignored.</p>
       <p class="instructions">Advanced feature: You can prefix words with "!" to indicate that they are permitted as guesses, but not as solutions.</p>
       <p class="instructions">No data will be transmitted to the server. The word list will be cached locally in your browser.</p>
-      <p id="word-list-log" class="log">Please upload a word list first. Example: <a href="http://pages.cs.wisc.edu/~o-laughl/csw15.txt">http://pages.cs.wisc.edu/~o-laughl/csw15.txt</a></p>
+      <pre id="word-list-log" class="log">Please upload a word list first. Example: <a href="http://pages.cs.wisc.edu/~o-laughl/csw15.txt">http://pages.cs.wisc.edu/~o-laughl/csw15.txt</a></pre>
     </section>
     <section id="solver">
       <p><label for="guesses-textarea">Guesses:</label></p>
       <p><textarea id="guesses-textarea" rows="6" cols="12"></textarea></p>
+      <p>Example of how to enter guesses:</p>
+      <pre><code>raise 01001
+metal 01010
+annex 20020</code></pre>
+      <ul>
+        <li><span style="background: lightgrey">0</span> = Letter is absent</li>
+        <li><span style="background: yellow">1</span> = Letter is present but at wrong location</li>
+        <li><span style="background: lime">2</span> = Letter is at the correct location</li>
+      </ul>
       <p><button id="solve-button">Find strategy</button></p>
-      <p id="solve-log" class="log"></p>
+      <pre id="solve-log" class="log"></pre>
       <table>
         <thead>
           <tr>

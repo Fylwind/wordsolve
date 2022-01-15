@@ -4,11 +4,7 @@ importScripts('./pkg/wordsolve.js');
 const lib = wasm_bindgen;
 const initLib = lib('./pkg/wordsolve_bg.wasm');
 
-function js_log(message) {
-    logAppend(message);
-}
-
-function js_now() {
+function now() {
     return performance.now();
 }
 
@@ -84,14 +80,6 @@ function computeResponse(query, candidate) {
         }
     }
     return (posMatch << 5) | charMatch;
-}
-
-function log(message) {
-    postMessage({cmd: "log", message});
-}
-
-function logAppend(message) {
-    postMessage({cmd: "logAppend", message});
 }
 
 let preprocessed = null;
@@ -267,7 +255,7 @@ function solve(p, queries, candidates) {
         const d = solveWithDecision(p, effectiveQueries, decision);
         console.timeEnd('solve-root');
         postMessage({
-            cmd: "appendQuery",
+            cmd: "Log",
             query: [
                 unpackWord(p.queries[decision.query]),
                 decision.kMax,
@@ -281,9 +269,11 @@ function solve(p, queries, candidates) {
 }
 
 async function main() {
-    log("Initializing...");
+    postMessage({cmd: "Log", message: "Initializing..."});
     await initLib;
-    log("Click 'Find strategy' to begin.");
+    postMessage({cmd: "ClearLog"});
+    postMessage({cmd: "Log", message: "Click 'Find strategy' to begin."});
+    lib.init();
     onmessage = e => lib.onmessage(e.data);
 }
 

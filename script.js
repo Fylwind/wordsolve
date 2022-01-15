@@ -108,10 +108,10 @@ function loadSolver(runner, wordList) {
     const log = document.getElementById("solve-log");
     const queriesTable = document.getElementById("queries");
     const candidatesTable = document.getElementById("candidates");
-    runner.commands.log = data => {
-        log.innerText = data.message;
+    runner.commands["ClearLog"] = data => {
+        log.innerText = "";
     };
-    runner.commands.logAppend = data => {
+    runner.commands["Log"] = data => {
         const message = data.message;
         if (message.startsWith("\x1b[2K\r")) {
             log.innerText =
@@ -121,13 +121,13 @@ function loadSolver(runner, wordList) {
             log.innerText += message + "\n";
         }
     };
-    runner.commands.clearQueries = data => {
+    runner.commands["ClearQueries"] = data => {
         for (const i = queriesTable.length - 1; i > 0; --i) {
             const child = queriesTable.children[i];
             queriesTable.removeChild(queriesTable.children[i]);
         }
     };
-    runner.commands.appendQuery = data => {
+    runner.commands["AppendQuery"] = data => {
         appendTableRow(queriesTable, data.query);
     };
     runner.commands["SetCandidates"] = data => {

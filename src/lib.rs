@@ -4,7 +4,6 @@
 use float_ord::FloatOrd;
 use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;
-use js_sys;
 use lazy_static::lazy_static;
 use static_assertions::const_assert;
 use std::collections::BTreeMap;
@@ -12,9 +11,14 @@ use std::convert::{TryFrom, TryInto};
 use std::io::{BufRead, Write};
 use std::{cmp, fmt, io, str, time};
 
+#[cfg(target_arch = "wasm32")]
 mod js;
 
-fn solve(words: &[String], guesses: &str, log: &dyn Log) {
+#[cfg(target_arch = "wasm32")]
+fn solve(words: &[String], guesses: &str, log: &dyn Log) -> io::Result<()> {
+    if words.len() == 0 {
+        return Err(error("Error: Please upload a word list first."));
+    }
     let nonsolutions = words
         .iter()
         .filter(|w| w.starts_with("!"))
@@ -29,13 +33,17 @@ fn solve(words: &[String], guesses: &str, log: &dyn Log) {
         solutions: candidates,
         nonsolutions: nonsolutions,
     };
+    js::OutMessage::ClearLog.post();
     log.log("Preprocessing...");
-    let guesses = parse_guesses(guesses, "\n").unwrap();
+    let guesses = parse_guesses(guesses, "\n")?;
     database.solutions = filter_candidates(&guesses, &database.solutions);
 
     let mut candidates = database.solutions.clone();
+    if candidates.is_empty() {
+        return Err(error("no candidates remain"));
+    }
     candidates.sort();
-    js::post_message(&js::OutMessage::SetCandidates { candidates });
+    js::OutMessage::SetCandidates { candidates }.post();
 
     let matrix = Matrix::build(&database);
 
@@ -50,9 +58,7 @@ fn solve(words: &[String], guesses: &str, log: &dyn Log) {
     };
     let mut out_file = io::sink();
     log.log("Solving...");
-    solver
-        .dump_strategy(&matrix, &queries, &queries, &candidates, &mut out_file, log)
-        .unwrap();
+    solver.dump_strategy(&matrix, &queries, &queries, &candidates, &mut out_file, log)
 }
 
 fn error(message: &str) -> io::Error {
@@ -103,14 +109,17 @@ impl TryFrom<&str> for Response {
     type Error = io::Error;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         if s.len() != NUM_CHARS {
-            return Err(error("length mismatch"));
+            return Err(error(&format!(
+                "response must have {} characters",
+                NUM_CHARS
+            )));
         }
         const_assert!(Color::COUNT as u32 as usize == Color::COUNT);
         s.chars()
             .map(|c| {
                 let digit = c
                     .to_digit(Color::COUNT as u32)
-                    .ok_or(error("invalid digit"))?;
+                    .ok_or(error("response must consist of numerical digits"))?;
                 Ok(Color(digit as _))
             })
             .collect()
@@ -314,7 +323,7 @@ pub fn parse_guesses<'a>(s: &'a str, separator: &str) -> io::Result<Vec<(&'a str
         }
         let fields: Vec<&str> = entry.trim().split_whitespace().collect();
         if fields.len() != 2 {
-            return Err(error("wrong number of fields"));
+            return Err(error("each line of guesses must have exactly 2 fields"));
         }
         guesses.push((fields[0], Response::try_from(fields[1])?));
     }
@@ -382,6 +391,33 @@ fn render_duration_secs(secs: f64) -> String {
             f64::floor(secs % 60.0),
         )
     }
+}
+
+fn divide_candidates(
+    matrix: &Matrix,
+    query: WordId,
+    candidates: &[WordId],
+    outcomes_buf: &mut HashMap<Response, Vec<WordId>>,
+) -> Option<(f64, Vec<(Response, Vec<WordId>)>)> {
+    outcomes_buf.clear();
+    for &candidate in candidates {
+        let response = matrix.response(query, candidate);
+        let candidates = outcomes_buf.entry(response).or_insert(Vec::default());
+        candidates.push(candidate);
+    }
+    if outcomes_buf.len() <= 1 {
+        return None;
+    }
+    let mut entropy = 0.0;
+    let mut outcomes: Vec<_> = outcomes_buf.drain().collect();
+    outcomes
+        .sort_unstable_by_key(|(response, candidates)| (cmp::Reverse(candidates.len()), *response));
+    let n = candidates.len();
+    for (_, candidates) in &outcomes {
+        let p = candidates.len() as f64 / n as f64;
+        entropy += -p * f64::log2(p);
+    }
+    Some((entropy, outcomes))
 }
 
 impl SolverState {
@@ -462,23 +498,9 @@ impl SolverState {
         let mut query_outcomes = Vec::default();
         for query in queries {
             let query = *query;
-            let outcomes = &mut self.map_buf;
-            outcomes.clear();
-            for &candidate in candidates {
-                let response = matrix.response(query, candidate);
-                let candidates = outcomes.entry(response).or_insert(Vec::default());
-                candidates.push(candidate);
-            }
-            if outcomes.len() > 1 {
-                let mut entropy = 0.0;
-                let mut outcomes: Vec<_> = outcomes.drain().collect();
-                outcomes.sort_unstable_by_key(|(response, candidates)| {
-                    (cmp::Reverse(candidates.len()), *response)
-                });
-                for (_, candidates) in &outcomes {
-                    let p = candidates.len() as f64 / num_candidates as f64;
-                    entropy += -p * f64::log2(p);
-                }
+            if let Some((entropy, outcomes)) =
+                divide_candidates(matrix, query, candidates, &mut self.map_buf)
+            {
                 query_outcomes.push((query, entropy, outcomes));
             }
         }
@@ -514,7 +536,7 @@ impl SolverState {
                 let mut beta = beta;
                 for (j, (_, remaining_candidates)) in outcomes.iter().enumerate() {
                     self.progress.push((j, outcomes.len()));
-                    let strategy = self.solve(
+                    let mut strategy = self.solve(
                         matrix,
                         &effective_queries,
                         remaining_candidates,
@@ -523,6 +545,9 @@ impl SolverState {
                         beta,
                         log,
                     );
+                    if remaining_candidates.len() == 1 && remaining_candidates[0] == query {
+                        strategy.score -= 1;
+                    }
                     worst_score = cmp::min(worst_score, strategy.score);
                     beta = cmp::min(beta, strategy.score);
                     self.progress.pop();
@@ -592,7 +617,7 @@ impl DepthStats {
 
 #[cfg(target_arch = "wasm32")]
 fn now() -> f64 {
-    js::js_now()
+    js::now() / 1e6
 }
 
 lazy_static! {

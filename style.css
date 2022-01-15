@@ -1,13 +1,18 @@
 html {
-    font-family: monospace;
+    font-family: sans-serif;
 }
 
 body {
     margin: 0;
 }
 
-p {
+p, pre {
     margin: 8px;
+}
+
+pre {
+    background: #f0f0f0;
+    padding: 8px;
 }
 
 label {

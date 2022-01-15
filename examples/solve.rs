@@ -20,7 +20,7 @@ struct Args {
     /// Filter candidates by responses. Example: -f 'hello 01001; world 02200'
     #[clap(long, short = 'f', default_value = "")]
     filters: String,
-    #[clap(long, default_value = "100")]
+    #[clap(long, default_value = "1")]
     max_branching: i32,
     #[clap(long, default_value = "10")]
     max_depth: i32,
