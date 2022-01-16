@@ -8,29 +8,48 @@
   </head>
   <body>
     <noscript class="error">Error: JavaScript is not enabled.</noscript>
+    <section id="status-bar">
+      <progress id="progress-bar" value="0"></progress>
+      <label id="status-message" for="progress-bar">&nbsp;</label>
+    </section>
     <section id="uploader">
-      <p><label for="word-list-input">Word list:</label></p>
-      <p><input id="word-list-input" type="file"/></p>
-      <p><button id="upload-word-list-button">Upload word list</button></p>
-      <p class="instructions">The word list should be a plain UTF-8 text file with one word per line. Words that are not 5 letters are ignored.</p>
-      <p class="instructions">Advanced feature: You can prefix words with "!" to indicate that they are permitted as guesses, but not as solutions.</p>
-      <p class="instructions">No data will be transmitted to the server. The word list will be cached locally in your browser.</p>
-      <pre id="word-list-log" class="log">Please upload a word list first. Example: <a href="http://pages.cs.wisc.edu/~o-laughl/csw15.txt">http://pages.cs.wisc.edu/~o-laughl/csw15.txt</a></pre>
+      <label for="word-list-input">Word list:</label>
+      <input id="word-list-input" type="file"/>
+      <button id="upload-word-list-button">Upload word list</button>
+      <details>
+        <summary>Help</summary>
+        <p>Before you can begin, you need to upload a word list.</p>
+        <p>The word list should be a plain text file (.txt) with one word per line, encoded as UTF-8. Words that are not 5 letters are ignored.</p>
+        <p>Word lists can be found online. Here is an example: <a href="http://pages.cs.wisc.edu/~o-laughl/csw15.txt">http://pages.cs.wisc.edu/~o-laughl/csw15.txt</a></p>
+        <p>Advanced feature: You can prefix words with "!" to indicate that they are permitted as guesses, but not as solutions.</p>
+        <p>No data will be transmitted to the server. The word list will be cached locally in your browser.</p>
+      </details>
     </section>
     <section id="solver">
-      <p><label for="guesses-textarea">Guesses:</label></p>
-      <p><textarea id="guesses-textarea" rows="6" cols="12"></textarea></p>
-      <p>Example of how to enter guesses:</p>
-      <pre><code>raise 01001
+      <label for="guesses-textarea">Guesses:</label><br/>
+      <textarea id="guesses-textarea" rows="6" cols="12"></textarea><br/>
+      <label>Max branching factor: <input id="max-branching" value="1"/></label><br/>
+      <button id="solve-button">Find strategy</button>
+      <details>
+        <summary>Help</summary>
+        <p>Example of how to enter guesses:</p>
+        <pre><code>raise 01001
 metal 01010
 annex 20020</code></pre>
-      <ul>
-        <li><span style="background: lightgrey">0</span> = Letter is absent</li>
-        <li><span style="background: yellow">1</span> = Letter is present but at wrong location</li>
-        <li><span style="background: lime">2</span> = Letter is at the correct location</li>
-      </ul>
-      <p><button id="solve-button">Find strategy</button></p>
-      <pre id="solve-log" class="log"></pre>
+        <ul>
+          <li><span style="background: lightgrey">0</span> = Letter is absent</li>
+          <li><span style="background: yellow">1</span> = Letter is present but at wrong location</li>
+          <li><span style="background: lime">2</span> = Letter is at the correct location</li>
+        </ul>
+      </details>
+    </section>
+    <section id="result">
+      <table>
+        <thead>
+          <tr><th>Candidate solutions</th></tr>
+        </thead>
+        <tbody id="candidates"></tbody>
+      </table>
       <table>
         <thead>
           <tr>
@@ -41,19 +60,7 @@ annex 20020</code></pre>
             <th>dAvg</th>
           </tr>
         </thead>
-        <tbody id="queries">
-          <tr>
-            <td>...</td>
-          </tr>
-        </tbody>
-      </table>
-      <table>
-        <thead>
-          <tr><th>Candidate solutions</th></tr>
-        </thead>
-        <tbody id="candidates">
-          <tr><td>...</td></tr>
-        </tbody>
+        <tbody id="queries"></tbody>
       </table>
     </section>
     <script src="script.js"></script>

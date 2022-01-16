@@ -56,9 +56,10 @@ pub fn main() -> io::Result<()> {
     );
     database.nonsolutions.sort();
 
-    eprintln!("Building matrix...");
     let t0 = time::Instant::now();
-    let matrix = Matrix::build(&database);
+    let matrix = Matrix::build(&database, &mut |progress| {
+        eprint!("\x1b[2K\rBuilding matrix... {:6.3}%", progress);
+    })?;
     eprintln!("time = {:?}", t0.elapsed());
     let candidates: Vec<WordId> = (0..database.solutions.len())
         .map(|c| WordId(c.try_into().unwrap()))

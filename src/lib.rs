@@ -14,55 +14,52 @@ use std::{cmp, fmt, io, str, time};
 #[cfg(target_arch = "wasm32")]
 mod js;
 
-#[cfg(target_arch = "wasm32")]
-fn solve(words: &[String], guesses: &str, log: &dyn Log) -> io::Result<()> {
-    if words.len() == 0 {
-        return Err(error("Error: Please upload a word list first."));
-    }
-    let nonsolutions = words
-        .iter()
-        .filter(|w| w.starts_with("!"))
-        .map(|w| w.strip_prefix('!').unwrap_or(w).to_owned())
-        .collect();
-    let candidates = words
-        .iter()
-        .filter(|w| !w.starts_with("!"))
-        .cloned()
-        .collect();
-    let mut database = Database {
-        solutions: candidates,
-        nonsolutions: nonsolutions,
-    };
-    js::OutMessage::ClearLog.post();
-    log.log("Preprocessing...");
-    let guesses = parse_guesses(guesses, "\n")?;
-    database.solutions = filter_candidates(&guesses, &database.solutions);
-
-    let mut candidates = database.solutions.clone();
-    if candidates.is_empty() {
-        return Err(error("no candidates remain"));
-    }
-    candidates.sort();
-    js::OutMessage::SetCandidates { candidates }.post();
-
-    let matrix = Matrix::build(&database);
-
-    let candidates: Vec<WordId> = (0..database.solutions.len())
-        .map(|c| WordId(c.try_into().unwrap()))
-        .collect();
-    let queries: Vec<WordId> = (0..matrix.words.len()).map(From::from).collect();
-
-    let solver = Solver {
-        max_depth: 9,
-        max_branching: 1,
-    };
-    let mut out_file = io::sink();
-    log.log("Solving...");
-    solver.dump_strategy(&matrix, &queries, &queries, &candidates, &mut out_file, log)
-}
-
 fn error(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::Other, message)
+}
+
+lazy_static! {
+    static ref REFERENCE_INSTANT: time::Instant = time::Instant::now();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn now() -> f64 {
+    let reference = *REFERENCE_INSTANT; // This must run first!
+    time::Instant::now().duration_since(reference).as_secs_f64()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now() -> f64 {
+    js::now() / 1e3
+}
+
+const NUM_CHARS: usize = 5;
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct WordChar(u8);
+
+impl WordChar {
+    const INVALID: Self = WordChar(0);
+}
+
+impl TryFrom<char> for WordChar {
+    type Error = io::Error;
+    fn try_from(c: char) -> Result<Self, Self::Error> {
+        let u = u8::try_from(u32::from(c))
+            .map_err(|_| error(&format!("invalid character: {:?}", c)))?;
+        if u == 0 {
+            return Err(error(&format!("invalid character: {:?}", c)));
+        }
+        Ok(Self(u))
+    }
+}
+
+fn word_chars(word: &str) -> io::Result<[WordChar; NUM_CHARS]> {
+    let mut result = [WordChar::INVALID; NUM_CHARS];
+    for (c, r) in word.chars().zip(&mut result) {
+        *r = WordChar::try_from(c)?;
+    }
+    Ok(result)
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -80,8 +77,6 @@ impl fmt::Display for Color {
         write!(f, "{}", self.0)
     }
 }
-
-const NUM_CHARS: usize = 5;
 
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Response(u8);
@@ -152,46 +147,27 @@ impl FromIterator<Color> for Response {
 
 impl Response {
     fn compute(query: &str, solution: &str) -> Self {
-        let query: Vec<char> = query.chars().collect();
-        let solution: Vec<char> = solution.chars().collect();
-        Self::compute_with(
-            &query,
-            &solution,
-            &mut Default::default(),
-            &mut Default::default(),
-        )
+        let query = word_chars(query).unwrap();
+        let solution = word_chars(solution).unwrap();
+        Self::compute_with(query, solution)
     }
 
-    fn compute_with(
-        query: &[char],
-        solution: &[char],
-        color_buf: &mut Vec<Color>,
-        mask_buf: &mut Vec<bool>,
-    ) -> Self {
-        let n = NUM_CHARS;
-        assert_eq!(n, query.len());
-        assert_eq!(n, solution.len());
-        color_buf.clear();
-        color_buf.resize(n, Color::GRAY);
-        mask_buf.clear();
-        mask_buf.resize(n, false);
-        for (((color, &query_char), mask), &solution_char) in color_buf
-            .iter_mut()
-            .zip(query)
-            .zip(mask_buf.iter_mut())
-            .zip(solution)
+    fn compute_with(query: [WordChar; NUM_CHARS], mut solution: [WordChar; NUM_CHARS]) -> Self {
+        let mut color_buf = [Color::GRAY; NUM_CHARS];
+        for ((color, &query_char), solution_char) in
+            color_buf.iter_mut().zip(&query).zip(&mut solution)
         {
-            if query_char == solution_char {
+            if query_char == *solution_char {
                 *color = Color::GREEN;
-                *mask = true;
+                *solution_char = WordChar::INVALID;
             }
         }
-        for (color, &query_char) in color_buf.iter_mut().zip(query) {
+        for (color, &query_char) in color_buf.iter_mut().zip(&query) {
             if *color == Color::GRAY {
-                for (mask, &solution_char) in mask_buf.iter_mut().zip(solution) {
-                    if !*mask && query_char == solution_char {
+                for solution_char in &mut solution {
+                    if query_char == *solution_char {
                         *color = Color::YELLOW;
-                        *mask = true;
+                        *solution_char = WordChar::INVALID;
                         break;
                     }
                 }
@@ -219,7 +195,7 @@ pub struct Matrix {
 }
 
 impl Matrix {
-    pub fn build(database: &Database) -> Self {
+    pub fn build(database: &Database, update_progress: &mut dyn FnMut(f64)) -> io::Result<Self> {
         let mut responses = Vec::default();
         let words: Vec<String> = database
             .solutions
@@ -237,27 +213,30 @@ impl Matrix {
                 )
             })
             .collect();
-        let queries: Vec<Vec<char>> = words.iter().map(|word| word.chars().collect()).collect();
-        let solutions: Vec<Vec<char>> = database
+        let queries: Vec<[WordChar; NUM_CHARS]> = words
+            .iter()
+            .map(|word| word_chars(word))
+            .collect::<io::Result<Vec<_>>>()?;
+        let solutions: Vec<[WordChar; NUM_CHARS]> = database
             .solutions
             .iter()
-            .map(|word| word.chars().collect())
-            .collect();
-        let mut color_buf = Default::default();
-        let mut mask_buf = Default::default();
-        for query in &queries {
-            for solution in &solutions {
-                let response =
-                    Response::compute_with(query, solution, &mut color_buf, &mut mask_buf);
+            .map(|word| word_chars(word))
+            .collect::<io::Result<Vec<_>>>()?;
+        for (i, &query) in queries.iter().enumerate() {
+            if i % cmp::max(1, 10000 / solutions.len()) == 0 {
+                update_progress(i as f64 / queries.len() as f64);
+            }
+            for &solution in &solutions {
+                let response = Response::compute_with(query, solution);
                 responses.push(response)
             }
         }
-        Self {
+        Ok(Self {
             responses,
             num_solutions: database.solutions.len(),
             words,
             word_ids,
-        }
+        })
     }
 
     fn response(&self, query: WordId, solution: WordId) -> Response {
@@ -342,34 +321,6 @@ pub fn filter_candidates(guesses: &[(&str, Response)], candidates: &[String]) ->
         .collect()
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Strategy {
-    query: WordId,
-    score: i32,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Solver {
-    pub max_branching: i32,
-    pub max_depth: i32,
-}
-
-#[derive(Clone, Debug, Default)]
-struct SolverState {
-    conf: Solver,
-    path: Vec<WordId>,
-    map_buf: HashMap<Response, Vec<WordId>>,
-    cache: Vec<HashMap<Vec<WordId>, Strategy>>,
-    cache_hits: u32,
-    /// Restricts the set of queries at the root.
-    /// Does not affect its children.
-    root_queries: HashSet<WordId>,
-    progress: Vec<(usize, usize)>,
-    ticks_before_render: u32,
-    ticks_total: u64,
-    t_start: Option<f64>,
-}
-
 fn ceil_log(mut n: i32, q: i32) -> i32 {
     let mut l = 0;
     while n > 1 {
@@ -380,16 +331,14 @@ fn ceil_log(mut n: i32, q: i32) -> i32 {
 }
 
 fn render_duration_secs(secs: f64) -> String {
-    if secs >= 864000.0 {
-        format!("?:??:??:??")
+    if secs >= 86400.0 {
+        format!("{:.0}d", secs / 86400.0)
+    } else if secs >= 3600.0 {
+        format!("{:.0}h", secs / 3600.0)
+    } else if secs >= 60.0 {
+        format!("{:.0}min", secs / 60.0)
     } else {
-        format!(
-            "{:01}:{:02}:{:02}:{:02}",
-            f64::floor(secs / 86400.0),
-            f64::floor(secs / 3600.0 % 60.0),
-            f64::floor(secs / 60.0 % 60.0),
-            f64::floor(secs % 60.0),
-        )
+        format!("{:.0}s", secs)
     }
 }
 
@@ -420,50 +369,152 @@ fn divide_candidates(
     Some((entropy, outcomes))
 }
 
+type ProgressSink<'a> = dyn FnMut(f64, String) + 'a;
+
+fn tree_progress(stack: &[(f64, f64)]) -> f64 {
+    stack.iter().rfold(0.0, |subprogress, &(progress, weight)| {
+        progress + weight * subprogress
+    })
+}
+
+struct ProgressTracker<'a> {
+    progress_sink: &'a mut ProgressSink<'a>,
+    ticks_before_render: u32,
+    ticks_total: u64,
+    t_start: f64,
+}
+
+impl<'a> ProgressTracker<'a> {
+    const RENDER_INTERVAL: time::Duration = time::Duration::from_millis(200);
+    const INITIAL_TICKS_BEFORE_RENDER: u32 = 1000;
+
+    fn new(progress_sink: &'a mut ProgressSink<'a>) -> Self {
+        let ticks_before_render = Self::INITIAL_TICKS_BEFORE_RENDER;
+        Self {
+            progress_sink,
+            ticks_before_render,
+            ticks_total: ticks_before_render as u64,
+            t_start: now(),
+        }
+    }
+
+    fn tick(&mut self, query_progress: &mut dyn FnMut() -> (f64, String)) {
+        self.ticks_before_render -= 1;
+        if self.ticks_before_render != 0 {
+            return;
+        }
+        let (progress, message) = query_progress();
+        let elapsed = now() - self.t_start;
+        let remaining = elapsed * (1.0 - progress) / progress;
+        (self.progress_sink)(
+            progress,
+            format!(
+                "{} elapsed | {} left {}",
+                render_duration_secs(elapsed),
+                render_duration_secs(remaining),
+                message
+            ),
+        );
+        self.ticks_before_render = ((Self::RENDER_INTERVAL.as_secs_f64() / elapsed
+            * self.ticks_total as f64) as u32)
+            .clamp(self.ticks_before_render / 2, self.ticks_before_render * 2)
+            .clamp(1, 1000000);
+        self.ticks_total += self.ticks_before_render as u64;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Strategy {
+    query: WordId,
+    score: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Solver {
+    pub max_branching: i32,
+    pub max_depth: i32,
+}
+
+impl Solver {
+    fn solve(
+        &self,
+        matrix: &Matrix,
+        queries: &[WordId],
+        root_queries: &[WordId],
+        candidates: &[WordId],
+        progress_sink: &mut ProgressSink,
+    ) -> Strategy {
+        let mut state = SolverState::default();
+        state.cache = vec![Default::default(); self.max_depth as usize];
+        state.root_queries = root_queries.iter().copied().collect();
+        let mut context = SolverContext {
+            state,
+            conf: self,
+            matrix,
+            progress_tracker: ProgressTracker::new(progress_sink),
+        };
+        context.solve(queries, candidates, 0, i32::MIN, i32::MAX)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct SolverState {
+    path: Vec<WordId>,
+    map_buf: HashMap<Response, Vec<WordId>>,
+    cache: Vec<HashMap<Vec<WordId>, Strategy>>,
+    cache_hits: u32,
+    /// Restricts the set of queries at the root.
+    /// Does not affect its children.
+    root_queries: HashSet<WordId>,
+    progress: Vec<(f64, f64)>,
+}
+
 impl SolverState {
     fn render_path(&self, matrix: &Matrix) -> String {
         matrix.words(&self.path).join(".")
     }
 
-    fn render_progress(&mut self, matrix: &Matrix, num_candidates: usize, log: &dyn Log) {
-        const RENDER_INTERVAL: time::Duration = time::Duration::from_millis(200);
-        let progress = self
-            .progress
-            .iter()
-            .rfold(0.0, |b, &(k, n)| (k as f64 + b) / n as f64);
-        let elapsed = now() - self.t_start.expect("missing t_start");
-        let remaining = elapsed * (1.0 - progress) / progress;
-        log.log(&format!(
-            "\x1b[2K\r{:6.3}%\t{}\t# ETA={} hit={:07}/{:07} cand={:04} {}",
-            progress * 100.0,
-            render_duration_secs(elapsed),
-            render_duration_secs(remaining),
-            self.cache_hits,
-            self.cache.iter().map(|x| x.len()).sum::<usize>(),
-            num_candidates,
-            self.render_path(matrix),
-        ));
-        self.ticks_before_render = ((RENDER_INTERVAL.as_secs_f64() / elapsed
-            * self.ticks_total as f64) as u32)
-            .clamp(1, 1000000);
-        self.ticks_total += self.ticks_before_render as u64;
+    fn push_progress(&mut self, k: usize, n: usize) {
+        self.progress.push((k as f64 / n as f64, 1.0 / n as f64));
     }
 
+    fn pop_progress(&mut self) {
+        self.progress.pop();
+    }
+
+    fn render_progress(&mut self, matrix: &Matrix, num_candidates: usize) -> (f64, String) {
+        (
+            tree_progress(&self.progress),
+            format!(
+                "[words={} nc={} hit={}/{}]",
+                self.render_path(matrix),
+                num_candidates,
+                self.cache_hits,
+                self.cache.iter().map(|x| x.len()).sum::<usize>(),
+            ),
+        )
+    }
+}
+
+struct SolverContext<'a> {
+    state: SolverState,
+    conf: &'a Solver,
+    matrix: &'a Matrix,
+    progress_tracker: ProgressTracker<'a>,
+}
+
+impl<'a> SolverContext<'a> {
     fn solve(
         &mut self,
-        matrix: &Matrix,
         queries: &[WordId],
         candidates: &[WordId],
         depth: i32,
         alpha: i32,
         beta: i32,
-        log: &dyn Log,
     ) -> Strategy {
         let num_candidates = candidates.len();
-        self.ticks_before_render -= 1;
-        if self.ticks_before_render == 0 {
-            self.render_progress(matrix, num_candidates, log);
-        }
+        self.progress_tracker
+            .tick(&mut || self.state.render_progress(self.matrix, num_candidates));
         let fallback_query = candidates[0];
         if num_candidates <= 1 {
             return Strategy {
@@ -491,15 +542,15 @@ impl SolverState {
                 score: pessimistic_score,
             };
         }
-        if let Some(&strategy) = self.cache[depth as usize].get(candidates) {
-            self.cache_hits += 1;
+        if let Some(&strategy) = self.state.cache[depth as usize].get(candidates) {
+            self.state.cache_hits += 1;
             return strategy;
         }
         let mut query_outcomes = Vec::default();
         for query in queries {
             let query = *query;
             if let Some((entropy, outcomes)) =
-                divide_candidates(matrix, query, candidates, &mut self.map_buf)
+                divide_candidates(self.matrix, query, candidates, &mut self.state.map_buf)
             {
                 query_outcomes.push((query, entropy, outcomes));
             }
@@ -512,7 +563,7 @@ impl SolverState {
         if depth == 0 {
             query_outcomes = query_outcomes
                 .into_iter()
-                .filter(|(query, _, _)| self.root_queries.contains(query))
+                .filter(|(query, _, _)| self.state.root_queries.contains(query))
                 .collect();
         }
         let mut best_strategy = Strategy {
@@ -525,32 +576,30 @@ impl SolverState {
             .take(self.conf.max_branching as usize)
             .enumerate()
         {
-            self.progress.push((
+            self.state.push_progress(
                 i,
                 cmp::min(self.conf.max_branching as usize, query_outcomes.len()),
-            ));
+            );
             let query = *query;
-            self.path.push(query);
+            self.state.path.push(query);
             let mut worst_score = i32::MAX;
             {
                 let mut beta = beta;
                 for (j, (_, remaining_candidates)) in outcomes.iter().enumerate() {
-                    self.progress.push((j, outcomes.len()));
+                    self.state.push_progress(j, outcomes.len());
                     let mut strategy = self.solve(
-                        matrix,
                         &effective_queries,
                         remaining_candidates,
                         depth + 1,
                         alpha,
                         beta,
-                        log,
                     );
                     if remaining_candidates.len() == 1 && remaining_candidates[0] == query {
                         strategy.score -= 1;
                     }
                     worst_score = cmp::min(worst_score, strategy.score);
                     beta = cmp::min(beta, strategy.score);
-                    self.progress.pop();
+                    self.state.pop_progress();
                     if beta <= alpha {
                         break;
                     }
@@ -565,13 +614,13 @@ impl SolverState {
                 best_strategy.score = worst_score;
             }
             alpha = cmp::max(alpha, worst_score);
-            self.path.pop();
-            self.progress.pop();
+            self.state.path.pop();
+            self.state.pop_progress();
             if beta <= alpha {
                 break;
             }
         }
-        self.cache[depth as usize].insert(candidates.to_owned(), best_strategy);
+        self.state.cache[depth as usize].insert(candidates.to_owned(), best_strategy);
         best_strategy
     }
 }
@@ -615,43 +664,8 @@ impl DepthStats {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn now() -> f64 {
-    js::now() / 1e6
-}
-
-lazy_static! {
-    static ref REFERENCE_INSTANT: time::Instant = time::Instant::now();
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn now() -> f64 {
-    let reference = *REFERENCE_INSTANT; // This must run first!
-    time::Instant::now().duration_since(reference).as_secs_f64()
-}
-
 impl Solver {
-    fn solve(
-        &self,
-        matrix: &Matrix,
-        queries: &[WordId],
-        root_queries: &[WordId],
-        candidates: &[WordId],
-        log: &dyn Log,
-    ) -> Strategy {
-        let mut state = SolverState::default();
-        state.conf = *self;
-        state.cache = vec![Default::default(); self.max_depth as usize];
-        state.root_queries = root_queries.iter().copied().collect();
-        state.t_start = Some(now());
-        state.ticks_before_render = 1000;
-        state.ticks_total = state.ticks_before_render as u64;
-        let strategy = state.solve(matrix, queries, candidates, 0, i32::MIN, i32::MAX, log);
-        log.log("\x1b[2K\r");
-        strategy
-    }
-
-    fn dump_strategy_with(
+    fn dump_strategy_with<'a>(
         &self,
         matrix: &Matrix,
         queries: &[WordId],
@@ -663,10 +677,18 @@ impl Solver {
         node_counter: usize,
         counter: &mut usize,
         sink: &mut dyn Write,
-        log: &dyn Log,
+        log: &'a dyn Log,
     ) -> io::Result<()> {
         let t0 = now();
-        let strategy = self.solve(matrix, queries, root_queries, candidates, log);
+        let strategy = self.solve(
+            matrix,
+            queries,
+            root_queries,
+            candidates,
+            &mut |progress, message| {
+                log.log(&format!("\x1b[2K\r{:6.3}%\t{}", progress, message));
+            },
+        );
         if depth == 0 {
             log.log(&format!(
                 "\nSolve time = {:?}, query = {:?}, score = {}",
@@ -767,5 +789,104 @@ impl Solver {
         )?;
         depth_stats.log_summary(log);
         Ok(())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn solve(words: &[String], guesses: &str, max_branching: i32, log: &dyn Log) -> io::Result<()> {
+    if words.len() == 0 {
+        return Err(error("Error: Please upload a word list first."));
+    }
+    let nonsolutions = words
+        .iter()
+        .filter(|w| w.starts_with("!"))
+        .map(|w| w.strip_prefix('!').unwrap_or(w).to_owned())
+        .collect();
+    let candidates = words
+        .iter()
+        .filter(|w| !w.starts_with("!"))
+        .cloned()
+        .collect();
+    let mut database = Database {
+        solutions: candidates,
+        nonsolutions: nonsolutions,
+    };
+    let guesses = parse_guesses(guesses, "\n")?;
+    database.solutions = filter_candidates(&guesses, &database.solutions);
+
+    let mut candidates = database.solutions.clone();
+    if candidates.is_empty() {
+        return Err(error("no candidates remain"));
+    }
+    candidates.sort();
+    js::OutMessage::SetCandidates { candidates }.post();
+
+    let matrix = {
+        let _timer = js::Timer::from("preprocess");
+        Matrix::build(&database, &mut |progress| {
+            js::update_progress(format!("Step 1 of 2: Preprocessing..."), progress);
+        })?
+    };
+
+    let candidates: Vec<WordId> = (0..database.solutions.len())
+        .map(|c| WordId(c.try_into().unwrap()))
+        .collect();
+    let queries: Vec<WordId> = (0..matrix.words.len()).map(From::from).collect();
+
+    let solver = Solver {
+        max_depth: 9,
+        max_branching: max_branching,
+    };
+    js::update_progress(format!("Step 2 of 2: Solving..."), 0.0);
+    {
+        let _timer = js::Timer::from("solve");
+        let strategy = solver.solve(
+            &matrix,
+            &queries,
+            &queries,
+            &candidates,
+            &mut |progress, message| {
+                js::update_progress(format!("Step 2 of 2: Solving... {}", message), progress);
+            },
+        );
+        log.log(&format!("{:?}", strategy));
+        log.log(&format!("QUERY = {:?}", matrix.word(strategy.query)));
+    }
+    js::update_status(format!("Done!"));
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_string() {
+        for response in ["22222", "20220", "02022", "12010", "11210", "00000"] {
+            assert_eq!(
+                format!("{}", Response::try_from(response).unwrap()),
+                response,
+            );
+        }
+    }
+
+    #[test]
+    fn response_compute() {
+        for (query, candidate, response) in [
+            ("abcde", "abcde", "22222"),
+            ("apcdq", "abcde", "20220"),
+            ("pbqde", "abcde", "02022"),
+            ("bbbde", "abcbd", "12010"),
+            ("bbcdc", "adcbb", "11210"),
+            ("pqrst", "abcbd", "00000"),
+        ] {
+            assert_eq!(
+                Response::compute(query, candidate),
+                Response::try_from(response).unwrap(),
+                "{} {}",
+                query,
+                candidate,
+            );
+        }
     }
 }

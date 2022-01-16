@@ -15,7 +15,7 @@ pre {
     padding: 8px;
 }
 
-label {
+#uploader label, #solver label {
     font-weight: bold;
 }
 
@@ -34,17 +34,30 @@ label {
 }
 
 section {
-    padding: 5px;
+    padding: 10px;
+}
+
+#status-bar progress {
+    width: 100%;
+}
+
+#status-bar label {
+    display: block;
 }
 
 #uploader {
     background: #ccc;
 }
 
-#solver table, #solver td, #solver th {
+#result table {
+    float: left;
+    border: 1px solid grey;
+}
+
+#result td, #result th {
     padding: 5px;
 }
 
-#solver th {
+#result th {
     background: #f0f0f0;
 }

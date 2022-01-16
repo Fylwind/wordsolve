@@ -11,29 +11,31 @@ function parseWords(lines) {
     return words;
 }
 
-function loadWordsFromCache(storageKey, log, wordList) {
+function loadWordsFromCache(storageKey, statusBar, wordList) {
     const list = localStorage.getItem(storageKey);
-    if (list) {
-        const words = parseWords(list);
-        log.innerText = `Loaded ${words.length} word(s) from cache.`;
-        wordList.words = words;
+    if (!list) {
+        statusBar.update("Please upload a word list first.");
+        return;
     }
+    const words = parseWords(list);
+    statusBar.update(`Loaded ${words.length} word(s) from cache.`);
+    wordList.words = words;
 }
 
-async function loadWordsFromFile(storageKey, input, log, wordList) {
-    log.innerText = "Loading...";
+async function loadWordsFromFile(storageKey, input, statusBar, wordList) {
+    statusBar.update("Loading...", -1);
     const [file] = input.files;
     if (!file) {
-        log.innerText = "Error: Please select a file.";
+        statusBar.update("Error: Please select a file.");
         return;
     }
     try {
         const words = parseWords(await file.text());
         localStorage.setItem(storageKey, words.join("\n"));
-        log.innerText = `Loaded ${words.length} word(s).`;
+        statusBar.update(`Loaded ${words.length} word(s).`);
         wordList.words = words;
     } catch (e) {
-        log.innerText = `Error: ${e}`;
+        statusBar.update(`Error: ${e}`);
     }
 }
 
@@ -44,19 +46,6 @@ function loadRunner() {
         commands[e.data.cmd](e.data);
     });
     return {commands, worker};
-}
-
-function loadWordList(runner) {
-    const STORAGE_KEY = "wordsolve-wordlist";
-    const wordList = {words: []};
-    const button = document.getElementById("upload-word-list-button");
-    const input = document.getElementById("word-list-input");
-    const log = document.getElementById("word-list-log");
-    loadWordsFromCache(STORAGE_KEY, log, wordList);
-    button.addEventListener("click", () => {
-        loadWordsFromFile(STORAGE_KEY, input, log, wordList);
-    });
-    return wordList;
 }
 
 function clearTable(table) {
@@ -76,52 +65,57 @@ function appendTableRow(table, row) {
     table.appendChild(tr);
 }
 
-function parseGuesses(text) {
-    const guesses = [];
-    for (const line of text.split("\n")) {
-        const cleanedLine = line.split("#")[0].trim().toLowerCase();
-        if (!cleanedLine) {
-            continue;
-        }
-        const match = /^([^\s]+)\s+([^\s]+)$/.exec(cleanedLine);
-        if (match == null) {
-            throw new Error(
-                "each line must have two parts: <guessed_word> <color_response>"
-            );
-        }
-        const query = match[1];
-        if (!/[a-z]{5}/.test(query)) {
-            throw new Error("word must be 5 letters");
-        }
-        const response = match[2];
-        if (!/[0-2]{5}/.test(response)) {
-            throw new Error("response must be 5 digits, each from 0 to 2");
-        }
-        guesses.push({query, response});
-    }
-    return guesses;
+function loadStatusBar() {
+    const progressBar = document.getElementById("progress-bar");
+    const statusMessage = document.getElementById("status-message");
+    return {
+        update(message, progress) {
+            statusMessage.innerText = message || "\xa0";
+            statusMessage.className = message.startsWith("Error: ") ? "error" : "";
+            let progressText, progressOpacity = 1;
+            if (progress != null && progress >= 0 && progress <= 1) {
+                progressBar.value = progress;
+                progressText = progress.toFixed(2) + "%";
+            } else if (progress != null && progress < 0) {
+                progressBar.removeAttribute("value");
+                progressText = "";
+            } else {
+                progressOpacity = 0.5;
+                progressBar.value = 0;
+                progressText = "";
+            }
+            progressBar.style.opacity = progressOpacity;
+            progressBar.innerText = progressText;
+            progressBar.title = progressText;
+        },
+    };
 }
 
-function loadSolver(runner, wordList) {
+function loadWordList(runner, statusBar) {
+    const STORAGE_KEY = "wordsolve-wordlist";
+    const wordList = {words: []};
+    const button = document.getElementById("upload-word-list-button");
+    const input = document.getElementById("word-list-input");
+    loadWordsFromCache(STORAGE_KEY, statusBar, wordList);
+    button.addEventListener("click", () => {
+        loadWordsFromFile(STORAGE_KEY, input, statusBar, wordList);
+    });
+    return wordList;
+}
+
+function loadSolver(runner, statusBar, wordList) {
     const button = document.getElementById("solve-button");
     const textarea = document.getElementById("guesses-textarea");
-    const log = document.getElementById("solve-log");
     const queriesTable = document.getElementById("queries");
     const candidatesTable = document.getElementById("candidates");
-    runner.commands["ClearLog"] = data => {
-        log.innerText = "";
-    };
-    runner.commands["Log"] = data => {
-        const message = data.message;
-        if (message.startsWith("\x1b[2K\r")) {
-            log.innerText =
-                log.innerText.slice(0, log.innerText.lastIndexOf("\n") + 1)
-                + message.slice(5);
-        } else {
-            log.innerText += message + "\n";
+    const maxBranching = document.getElementById("max-branching");
+    runner.commands["UpdateStatus"] = ({message, progress}) => {
+        statusBar.update(message, progress);
+        if (progress == null) {
+            button.disabled = false;
         }
     };
-    runner.commands["ClearQueries"] = data => {
+    runner.commands["ClearQueries"] = ({}) => {
         for (const i = queriesTable.length - 1; i > 0; --i) {
             const child = queriesTable.children[i];
             queriesTable.removeChild(queriesTable.children[i]);
@@ -139,21 +133,27 @@ function loadSolver(runner, wordList) {
         candidatesTable.appendChild(fragment);
     };
     button.addEventListener("click", () => {
+        button.disabled = true;
         clearTable(queriesTable);
-        log.innerText = "";
+        if (!/^\d+$/.test(maxBranching.value)) {
+            runner.commands["UpdateStatus"]({message: "Error: Max branching factor must be an integer."});
+            return;
+        }
         runner.worker.postMessage({
-            cmd: "RunSolve",
-            words: wordList.words,
-            guesses: textarea.value,
+            "cmd": "RunSolve",
+            "words": wordList.words,
+            "guesses": textarea.value,
+            "max_branching": +maxBranching.value,
         });
     });
 }
 
 function main() {
     try {
+        const statusBar = loadStatusBar();
         const runner = loadRunner();
-        const wordList = loadWordList(runner);
-        loadSolver(runner, wordList);
+        const wordList = loadWordList(runner, statusBar);
+        loadSolver(runner, statusBar, wordList);
     } catch (e) {
         document.body.className = "error";
         document.body.innerText = `Error: ${e}`;
