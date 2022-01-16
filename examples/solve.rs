@@ -1,9 +1,8 @@
 use clap::Parser;
-use std::convert::TryInto;
 use std::path::PathBuf;
 use std::{fs, io, str, time};
 use wordsolve;
-use wordsolve::{Database, Matrix, Solver, StderrLog, WordId};
+use wordsolve::{Database, Matrix, Solver, WordId};
 
 fn error(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::Other, message)
@@ -47,22 +46,17 @@ pub fn main() -> io::Result<()> {
         return Err(error("no solution candidates remain"));
     }
     database.solutions.sort();
+    database.nonsolutions.sort();
     println!(
-        "{} {} {}",
+        "nc = {}, nq = {}",
         database.solutions.len(),
-        database.nonsolutions.len(),
         database.solutions.len() + database.nonsolutions.len()
     );
-    database.nonsolutions.sort();
 
     let t0 = time::Instant::now();
-    let matrix = Matrix::build(&database, &mut |progress, message| {
-        eprint!("\x1b[2K\rBuilding matrix... {:6.3}% {}", progress, message);
-    })?;
-    eprintln!("time = {:?}", t0.elapsed());
-    let candidates: Vec<WordId> = (0..database.solutions.len())
-        .map(|c| WordId(c.try_into().unwrap()))
-        .collect();
+    let matrix = Matrix::build(&database, &mut wordsolve::update_stderr_progress)?;
+    eprintln!("preprocess time = {:?}", t0.elapsed());
+    let candidates: Vec<WordId> = (0..database.solutions.len()).map(From::from).collect();
     let queries: Vec<WordId> = (0..matrix.words.len()).map(From::from).collect();
     let root_queries = matrix.word_ids(&args.root_queries);
     let root_queries = if root_queries.is_empty() {
@@ -77,14 +71,10 @@ pub fn main() -> io::Result<()> {
     };
     let mut out_file = io::BufWriter::new(fs::File::create(&args.out_strategy)?);
     eprintln!("Solving...");
-    solver.dump_strategy(
-        &matrix,
-        &queries,
-        root_queries,
-        &candidates,
-        &mut out_file,
-        &StderrLog,
-    )?;
+    let t0 = time::Instant::now();
+    solver.dump_strategy(&matrix, &queries, root_queries, &candidates, &mut out_file)?;
+    eprint!("\x1b[2K\r");
+    eprintln!("solve time = {:?}", t0.elapsed());
 
     Ok(())
 }

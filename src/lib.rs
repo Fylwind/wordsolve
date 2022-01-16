@@ -427,7 +427,7 @@ impl<'a> ProgressTracker<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Strategy {
     query: WordId,
     score: i32,
@@ -457,7 +457,9 @@ impl Solver {
             matrix,
             progress_tracker: ProgressTracker::new(progress_sink),
         };
-        context.solve(queries, candidates, 0, i32::MIN, i32::MAX)
+        let strategy = context.solve(queries, candidates, 0, i32::MIN, i32::MAX);
+        progress_sink(1.0, format!(""));
+        strategy
     }
 }
 
@@ -546,9 +548,9 @@ impl<'a> SolverContext<'a> {
                 score: pessimistic_score,
             };
         }
-        if let Some(&strategy) = self.state.cache[depth as usize].get(candidates) {
+        if let Some(strategy) = self.state.cache[depth as usize].get(candidates) {
             self.state.cache_hits += 1;
-            return strategy;
+            return strategy.clone();
         }
         let mut query_outcomes = Vec::default();
         for query in queries {
@@ -624,7 +626,7 @@ impl<'a> SolverContext<'a> {
                 break;
             }
         }
-        self.state.cache[depth as usize].insert(candidates.to_owned(), best_strategy);
+        self.state.cache[depth as usize].insert(candidates.to_owned(), best_strategy.clone());
         best_strategy
     }
 }
@@ -668,6 +670,14 @@ impl DepthStats {
     }
 }
 
+pub fn update_stderr_progress(progress: f64, message: String) {
+    if progress == 1.0 {
+        eprint!("\x1b[2K\r");
+    } else {
+        eprint!("\x1b[2K\r{:6.3}% {}", progress, message);
+    }
+}
+
 impl Solver {
     fn dump_strategy_with<'a>(
         &self,
@@ -681,7 +691,6 @@ impl Solver {
         node_counter: usize,
         counter: &mut usize,
         sink: &mut dyn Write,
-        log: &'a dyn Log,
     ) -> io::Result<()> {
         let t0 = now();
         let strategy = self.solve(
@@ -689,25 +698,23 @@ impl Solver {
             queries,
             root_queries,
             candidates,
-            &mut |progress, message| {
-                log.log(&format!("\x1b[2K\r{:6.3}%\t{}", progress, message));
-            },
+            &mut update_stderr_progress,
         );
         if depth == 0 {
-            log.log(&format!(
+            eprintln!(
                 "\nSolve time = {:?}, query = {:?}, score = {}",
                 now() - t0,
                 matrix.word(strategy.query),
                 strategy.score,
-            ));
+            );
             strategy.score;
         }
         assert_eq!(strategy.score == 0, candidates.len() <= 1);
         if min_expected_score > strategy.score {
-            log.log(&format!(
+            eprintln!(
                 "BUG: expected at least score {}, got {}",
                 min_expected_score, strategy.score,
-            ));
+            );
         }
         min_expected_score = strategy.score;
         if strategy.score == 0 {
@@ -762,7 +769,6 @@ impl Solver {
                 base_counter + i,
                 counter,
                 sink,
-                log,
             )?;
         }
         Ok(())
@@ -775,7 +781,6 @@ impl Solver {
         root_queries: &[WordId],
         candidates: &[WordId],
         sink: &mut dyn Write,
-        log: &dyn Log,
     ) -> io::Result<()> {
         let mut depth_stats = Default::default();
         self.dump_strategy_with(
@@ -789,9 +794,8 @@ impl Solver {
             0,
             &mut 1,
             sink,
-            log,
         )?;
-        depth_stats.log_summary(log);
+        depth_stats.log_summary(&StderrLog);
         Ok(())
     }
 }
@@ -840,7 +844,6 @@ fn solve(words: &str, guesses: &str, max_branching: i32, log: &dyn Log) -> io::R
                 js::update_progress(format!("(1/2) Solving... {}", message), progress);
             },
         );
-        log.log(&format!("{:?}", strategy));
         js::OutMessage::AppendQuery {
             query: vec![
                 matrix.word(strategy.query).into(),
