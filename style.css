@@ -43,15 +43,23 @@ section {
 
 #status-bar label {
     display: block;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 #uploader {
     background: #ccc;
 }
 
+#result {
+}
+
 #result table {
     float: left;
     border: 1px solid grey;
+    margin-right: 5px;
 }
 
 #result td, #result th {

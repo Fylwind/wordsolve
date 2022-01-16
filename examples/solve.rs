@@ -33,8 +33,7 @@ struct Args {
 pub fn main() -> io::Result<()> {
     let args = Args::parse();
 
-    let mut file = io::BufReader::new(fs::File::open(args.database)?);
-    let mut database = Database::read(&mut file)?;
+    let mut database = Database::parse(&fs::read_to_string(args.database)?)?;
     let guesses = wordsolve::parse_guesses(&args.filters, ";")?;
     database.solutions = wordsolve::filter_candidates(&guesses, &database.solutions);
     if let Some(limit) = args.truncate_solutions {
@@ -57,8 +56,8 @@ pub fn main() -> io::Result<()> {
     database.nonsolutions.sort();
 
     let t0 = time::Instant::now();
-    let matrix = Matrix::build(&database, &mut |progress| {
-        eprint!("\x1b[2K\rBuilding matrix... {:6.3}%", progress);
+    let matrix = Matrix::build(&database, &mut |progress, message| {
+        eprint!("\x1b[2K\rBuilding matrix... {:6.3}% {}", progress, message);
     })?;
     eprintln!("time = {:?}", t0.elapsed());
     let candidates: Vec<WordId> = (0..database.solutions.len())

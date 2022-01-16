@@ -22,6 +22,7 @@ pub fn now() -> f64 {
 #[serde(tag = "cmd")]
 pub enum OutMessage {
     UpdateStatus { message: String, progress: f64 },
+    AppendQuery { query: Vec<String> },
     SetCandidates { candidates: Vec<String> },
 }
 
@@ -35,7 +36,7 @@ impl OutMessage {
 #[serde(tag = "cmd")]
 pub enum InMessage {
     RunSolve {
-        words: Vec<String>,
+        words: String,
         guesses: String,
         max_branching: f64,
     },
@@ -56,7 +57,7 @@ pub fn onmessage(e: &JsValue) {
             max_branching,
         } => crate::solve(&words, &guesses, max_branching as _, &JsLog),
     } {
-        update_status(format!("{}", err));
+        update_status(format!("Error: {}", err));
     }
 }
 

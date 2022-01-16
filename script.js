@@ -8,17 +8,17 @@ function parseWords(lines) {
             words.push(word);
         }
     }
-    return words;
+    return {words: words.join("\n"), length: words.length};
 }
 
 function loadWordsFromCache(storageKey, statusBar, wordList) {
-    const list = localStorage.getItem(storageKey);
-    if (!list) {
+    const cachedWords = localStorage.getItem(storageKey);
+    if (!cachedWords) {
         statusBar.update("Please upload a word list first.");
         return;
     }
-    const words = parseWords(list);
-    statusBar.update(`Loaded ${words.length} word(s) from cache.`);
+    const {words, length} = parseWords(cachedWords);
+    statusBar.update(`Loaded ${length} word(s) from cache.`);
     wordList.words = words;
 }
 
@@ -30,9 +30,9 @@ async function loadWordsFromFile(storageKey, input, statusBar, wordList) {
         return;
     }
     try {
-        const words = parseWords(await file.text());
-        localStorage.setItem(storageKey, words.join("\n"));
-        statusBar.update(`Loaded ${words.length} word(s).`);
+        const {words, length} = parseWords(await file.text());
+        localStorage.setItem(storageKey, words);
+        statusBar.update(`Loaded ${length} word(s).`);
         wordList.words = words;
     } catch (e) {
         statusBar.update(`Error: ${e}`);
@@ -93,7 +93,7 @@ function loadStatusBar() {
 
 function loadWordList(runner, statusBar) {
     const STORAGE_KEY = "wordsolve-wordlist";
-    const wordList = {words: []};
+    const wordList = {words: ""};
     const button = document.getElementById("upload-word-list-button");
     const input = document.getElementById("word-list-input");
     loadWordsFromCache(STORAGE_KEY, statusBar, wordList);
@@ -113,12 +113,6 @@ function loadSolver(runner, statusBar, wordList) {
         statusBar.update(message, progress);
         if (progress == null) {
             button.disabled = false;
-        }
-    };
-    runner.commands["ClearQueries"] = ({}) => {
-        for (const i = queriesTable.length - 1; i > 0; --i) {
-            const child = queriesTable.children[i];
-            queriesTable.removeChild(queriesTable.children[i]);
         }
     };
     runner.commands["AppendQuery"] = data => {

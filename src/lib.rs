@@ -8,7 +8,7 @@ use lazy_static::lazy_static;
 use static_assertions::const_assert;
 use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::{cmp, fmt, io, str, time};
 
 #[cfg(target_arch = "wasm32")]
@@ -195,7 +195,7 @@ pub struct Matrix {
 }
 
 impl Matrix {
-    pub fn build(database: &Database, update_progress: &mut dyn FnMut(f64)) -> io::Result<Self> {
+    pub fn build(database: &Database, progress_sink: &mut ProgressSink) -> io::Result<Self> {
         let mut responses = Vec::default();
         let words: Vec<String> = database
             .solutions
@@ -222,10 +222,10 @@ impl Matrix {
             .iter()
             .map(|word| word_chars(word))
             .collect::<io::Result<Vec<_>>>()?;
+        let mut progress_tracker = ProgressTracker::new(progress_sink);
         for (i, &query) in queries.iter().enumerate() {
-            if i % cmp::max(1, 10000 / solutions.len()) == 0 {
-                update_progress(i as f64 / queries.len() as f64);
-            }
+            progress_tracker
+                .tick(&mut || (i as f64 / queries.len() as f64, format!("{}", words[i])));
             for &solution in &solutions {
                 let response = Response::compute_with(query, solution);
                 responses.push(response)
@@ -269,11 +269,11 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn read(r: &mut dyn BufRead) -> io::Result<Self> {
+    pub fn parse(s: &str) -> io::Result<Self> {
         let mut solutions = Vec::default();
         let mut nonsolutions = Vec::default();
-        for line in r.lines() {
-            let word = line?.trim().to_lowercase();
+        for line in s.lines() {
+            let word = line.trim().to_lowercase();
             let is_nonsolution = word.starts_with("!");
             let word = word.strip_prefix('!').unwrap_or(&word);
             let chars: Vec<char> = word.chars().collect();
@@ -331,7 +331,9 @@ fn ceil_log(mut n: i32, q: i32) -> i32 {
 }
 
 fn render_duration_secs(secs: f64) -> String {
-    if secs >= 86400.0 {
+    if !secs.is_finite() {
+        format!("??")
+    } else if secs >= 86400.0 {
         format!("{:.0}d", secs / 86400.0)
     } else if secs >= 3600.0 {
         format!("{:.0}h", secs / 3600.0)
@@ -381,19 +383,19 @@ struct ProgressTracker<'a> {
     progress_sink: &'a mut ProgressSink<'a>,
     ticks_before_render: u32,
     ticks_total: u64,
+    render_frequency: u32,
     t_start: f64,
 }
 
 impl<'a> ProgressTracker<'a> {
-    const RENDER_INTERVAL: time::Duration = time::Duration::from_millis(200);
-    const INITIAL_TICKS_BEFORE_RENDER: u32 = 1000;
+    const RENDER_INTERVAL: time::Duration = time::Duration::from_millis(50);
 
     fn new(progress_sink: &'a mut ProgressSink<'a>) -> Self {
-        let ticks_before_render = Self::INITIAL_TICKS_BEFORE_RENDER;
         Self {
             progress_sink,
-            ticks_before_render,
-            ticks_total: ticks_before_render as u64,
+            ticks_before_render: 1,
+            ticks_total: 1,
+            render_frequency: 1,
             t_start: now(),
         }
     }
@@ -406,20 +408,22 @@ impl<'a> ProgressTracker<'a> {
         let (progress, message) = query_progress();
         let elapsed = now() - self.t_start;
         let remaining = elapsed * (1.0 - progress) / progress;
+        self.render_frequency = ((Self::RENDER_INTERVAL.as_secs_f64() / elapsed
+            * self.ticks_total as f64) as u32)
+            .clamp(self.render_frequency / 2, self.render_frequency * 2)
+            .clamp(1, 1000000);
+        self.ticks_before_render = self.render_frequency;
+        self.ticks_total += self.render_frequency as u64;
         (self.progress_sink)(
             progress,
             format!(
-                "{} elapsed | {} left {}",
+                "{} elapsed | {} left | tbr:{} / {}",
                 render_duration_secs(elapsed),
                 render_duration_secs(remaining),
-                message
+                self.ticks_before_render,
+                message,
             ),
         );
-        self.ticks_before_render = ((Self::RENDER_INTERVAL.as_secs_f64() / elapsed
-            * self.ticks_total as f64) as u32)
-            .clamp(self.ticks_before_render / 2, self.ticks_before_render * 2)
-            .clamp(1, 1000000);
-        self.ticks_total += self.ticks_before_render as u64;
     }
 }
 
@@ -793,24 +797,11 @@ impl Solver {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn solve(words: &[String], guesses: &str, max_branching: i32, log: &dyn Log) -> io::Result<()> {
-    if words.len() == 0 {
-        return Err(error("Error: Please upload a word list first."));
+fn solve(words: &str, guesses: &str, max_branching: i32, log: &dyn Log) -> io::Result<()> {
+    if words.is_empty() {
+        return Err(error("Please upload a word list first."));
     }
-    let nonsolutions = words
-        .iter()
-        .filter(|w| w.starts_with("!"))
-        .map(|w| w.strip_prefix('!').unwrap_or(w).to_owned())
-        .collect();
-    let candidates = words
-        .iter()
-        .filter(|w| !w.starts_with("!"))
-        .cloned()
-        .collect();
-    let mut database = Database {
-        solutions: candidates,
-        nonsolutions: nonsolutions,
-    };
+    let mut database = Database::parse(words)?;
     let guesses = parse_guesses(guesses, "\n")?;
     database.solutions = filter_candidates(&guesses, &database.solutions);
 
@@ -823,8 +814,8 @@ fn solve(words: &[String], guesses: &str, max_branching: i32, log: &dyn Log) -> 
 
     let matrix = {
         let _timer = js::Timer::from("preprocess");
-        Matrix::build(&database, &mut |progress| {
-            js::update_progress(format!("Step 1 of 2: Preprocessing..."), progress);
+        Matrix::build(&database, &mut |progress, message| {
+            js::update_progress(format!("(0/2) Preprocessing... {}", message), progress);
         })?
     };
 
@@ -837,7 +828,7 @@ fn solve(words: &[String], guesses: &str, max_branching: i32, log: &dyn Log) -> 
         max_depth: 9,
         max_branching: max_branching,
     };
-    js::update_progress(format!("Step 2 of 2: Solving..."), 0.0);
+    js::update_progress(format!("(1/2) Solving..."), 0.0);
     {
         let _timer = js::Timer::from("solve");
         let strategy = solver.solve(
@@ -846,13 +837,19 @@ fn solve(words: &[String], guesses: &str, max_branching: i32, log: &dyn Log) -> 
             &queries,
             &candidates,
             &mut |progress, message| {
-                js::update_progress(format!("Step 2 of 2: Solving... {}", message), progress);
+                js::update_progress(format!("(1/2) Solving... {}", message), progress);
             },
         );
         log.log(&format!("{:?}", strategy));
-        log.log(&format!("QUERY = {:?}", matrix.word(strategy.query)));
+        js::OutMessage::AppendQuery {
+            query: vec![
+                matrix.word(strategy.query).into(),
+                format!("{}", strategy.score),
+            ],
+        }
+        .post();
     }
-    js::update_status(format!("Done!"));
+    js::update_status(format!("(2/2) Done!"));
     Ok(())
 }
 
