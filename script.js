@@ -48,10 +48,21 @@ function loadRunner() {
     return {commands, worker};
 }
 
-function clearTable(table) {
-    for (let i = table.children.length - 1; i >= 0; --i) {
-        const child = table.children[i];
-        table.removeChild(table.children[i]);
+// Can append either a string or an iterable of elements.
+function appendContents(element, contents) {
+    if (typeof contents == "string") {
+        element.appendChild(document.createTextNode(contents));
+    } else {
+        for (const child of contents) {
+            element.appendChild(child);
+        }
+    }
+}
+
+function removeAllChildren(element) {
+    for (let i = element.children.length - 1; i >= 0; --i) {
+        const child = element.children[i];
+        element.removeChild(element.children[i]);
     }
 }
 
@@ -59,7 +70,7 @@ function appendTableRow(table, row) {
     const tr = document.createElement("tr");
     for (const cell of row) {
         const td = document.createElement("td");
-        td.innerText = cell;
+        appendContents(td, cell);
         tr.appendChild(td);
     }
     table.appendChild(tr);
@@ -103,41 +114,75 @@ function loadWordList(runner, statusBar) {
     return wordList;
 }
 
+function createDetails(summaryChildren) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    appendContents(summary, summaryChildren);
+    details.appendChild(summary);
+    return details;
+}
+
+function renderDecisionTree(decision, prefix) {
+    const details = createDetails((prefix || "") + decision.query);
+    const div = document.createElement("div");
+    details.appendChild(div);
+    function onToggle() {
+        if (details.open) {
+            for (const outcome of decision.outcomes) {
+                const prefix = `${outcome.response} - `;
+                div.appendChild(
+                    outcome.next_decision == null
+                        ? createDetails(prefix + "(win)")
+                        : renderDecisionTree(outcome.next_decision, prefix));
+            }
+        } else {
+            removeAllChildren(div);
+        }
+        details.removeEventListener("toggle", onToggle);
+    }
+    details.addEventListener("toggle", onToggle);
+    return details;
+}
+
 function loadSolver(runner, statusBar, wordList) {
     const button = document.getElementById("solve-button");
     const textarea = document.getElementById("guesses-textarea");
     const queriesTable = document.getElementById("queries");
     const candidatesTable = document.getElementById("candidates");
-    const maxBranching = document.getElementById("max-branching");
     runner.commands["UpdateStatus"] = ({message, progress}) => {
         statusBar.update(message, progress);
         if (progress == null) {
             button.disabled = false;
         }
     };
-    runner.commands["AppendQuery"] = data => {
-        appendTableRow(queriesTable, data.query);
+    runner.commands["ReportStrategy"] = ({depths, depth_avg, decision_tree}) => {
+        console.log("ReportStrategy", depths, decision_tree);
+        const row = [
+            `${depths.length - 1}`,
+            `${depth_avg.toFixed(6)}`,
+            `[${depths.join(", ")}]`,
+            [renderDecisionTree(decision_tree)],
+        ];
+        appendTableRow(queriesTable, row);
     };
-    runner.commands["SetCandidates"] = data => {
-        clearTable(candidatesTable);
+    runner.commands["SetCandidates"] = ({candidates}) => {
+        removeAllChildren(candidatesTable);
         const fragment = new DocumentFragment();
-        for (const [i, candidate] of data.candidates.entries()) {
+        for (const [i, candidate] of candidates.entries()) {
             appendTableRow(fragment, [candidate]);
         }
         candidatesTable.appendChild(fragment);
+        document.getElementById("num-candidates").innerText = candidates.length;
     };
     button.addEventListener("click", () => {
         button.disabled = true;
-        clearTable(queriesTable);
-        if (!/^\d+$/.test(maxBranching.value)) {
-            runner.commands["UpdateStatus"]({message: "Error: Max branching factor must be an integer."});
-            return;
-        }
+        removeAllChildren(queriesTable);
         runner.worker.postMessage({
             "cmd": "RunSolve",
             "words": wordList.words,
             "guesses": textarea.value,
-            "max_branching": +maxBranching.value,
+            "num_roots": +document.getElementById("num-roots").value,
+            "dk_trunc": +document.getElementById("dk-trunc").value,
         });
     });
 }

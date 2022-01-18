@@ -1,6 +1,6 @@
-use crate::Log;
 use js_sys::Reflect;
 use serde::{Deserialize, Serialize};
+use std::io;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use web_sys::console;
@@ -9,8 +9,6 @@ use web_sys::console;
 extern "C" {
     static performance: web_sys::Performance;
 
-    fn logAppend(s: &str);
-
     fn postMessage(value: &JsValue);
 }
 
@@ -18,28 +16,38 @@ pub fn now() -> f64 {
     performance.now()
 }
 
-#[derive(Serialize)]
-#[serde(tag = "cmd")]
-pub enum OutMessage {
-    UpdateStatus { message: String, progress: f64 },
-    AppendQuery { query: Vec<String> },
-    SetCandidates { candidates: Vec<String> },
-}
-
-impl OutMessage {
-    pub fn post(&self) {
-        postMessage(&JsValue::from_serde(self).unwrap());
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(tag = "cmd")]
-pub enum InMessage {
+pub enum Request {
     RunSolve {
         words: String,
         guesses: String,
-        max_branching: f64,
+        num_roots: u32,
+        dk_trunc: f64,
     },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "cmd")]
+pub enum Reply {
+    UpdateStatus {
+        message: String,
+        progress: f64,
+    },
+    ReportStrategy {
+        depths: Vec<usize>,
+        depth_avg: f64,
+        decision_tree: crate::Decision,
+    },
+    SetCandidates {
+        candidates: Vec<String>,
+    },
+}
+
+impl Reply {
+    pub fn post(&self) {
+        postMessage(&JsValue::from_serde(self).unwrap());
+    }
 }
 
 #[wasm_bindgen]
@@ -49,16 +57,24 @@ pub fn init() {
 
 #[wasm_bindgen]
 pub fn onmessage(e: &JsValue) {
-    let data = Reflect::get(e, &"data".into()).unwrap();
-    if let Err(err) = match data.into_serde().unwrap() {
-        InMessage::RunSolve {
-            words,
-            guesses,
-            max_branching,
-        } => crate::solve(&words, &guesses, max_branching as _, &JsLog),
-    } {
+    if let Err(err) = handle_message(&Reflect::get(e, &"data".into()).unwrap()) {
         update_status(format!("Error: {}", err));
     }
+}
+
+fn handle_message(data: &JsValue) -> io::Result<()> {
+    match data.into_serde()? {
+        Request::RunSolve {
+            words,
+            guesses,
+            num_roots,
+            dk_trunc,
+        } => crate::solve(&words, &guesses, num_roots, dk_trunc),
+    }
+}
+
+pub fn log(message: &str) {
+    console::log_1(&message.into());
 }
 
 pub fn update_status(message: String) {
@@ -66,16 +82,7 @@ pub fn update_status(message: String) {
 }
 
 pub fn update_progress(message: String, progress: f64) {
-    OutMessage::UpdateStatus { message, progress }.post();
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct JsLog;
-
-impl Log for JsLog {
-    fn log(&self, message: &str) {
-        console::log_1(&message.into());
-    }
+    Reply::UpdateStatus { message, progress }.post();
 }
 
 #[derive(Debug)]

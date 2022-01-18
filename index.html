@@ -28,7 +28,8 @@
     <section id="solver">
       <label for="guesses-textarea">Guesses:</label><br/>
       <textarea id="guesses-textarea" rows="6" cols="12"></textarea><br/>
-      <label>Max branching factor: <input id="max-branching" value="1"/></label><br/>
+      <label>Number of root queries: <input id="num-roots" value="1"/></label><br/>
+      <label>"dk" truncation cutoff: <input id="dk-trunc" value="0.05"/></label><br/>
       <button id="solve-button">Find strategy</button>
       <details>
         <summary>Help</summary>
@@ -41,26 +42,38 @@ annex 20020</code></pre>
           <li><span style="background: yellow">1</span> = Letter is present but at wrong location</li>
           <li><span style="background: lime">2</span> = Letter is at the correct location</li>
         </ul>
+        <p>Parameters:</p>
+        <dl>
+          <dt>Number of root queries<dt>
+            <dd>[not yet implemented] An integer that controls how many root queries to try. Must be between 1 and the number of queries. Performance cost will increase roughly proportionally to this number.</dd>
+          <dt>"dk" truncation cutoff<dt>
+            <dd>A nonnegative number to control the degree of branching in the search tree. Choose 0 to minimize branching (fastest). Choose a larger number (say 0.4) to improve optimality but be warned that it can be very slow with large word lists (> 2k).</dd>
+        </dl>
       </details>
     </section>
     <section id="result">
+      <details>
+        <summary>List of candidate solutions (<span id="num-candidates">0</span>)</summary>
+        <table>
+          <thead>
+            <tr><th>Candidate</th></tr>
+          </thead>
+          <tbody id="candidates"></tbody>
+        </table>
+      </details>
       <table>
         <thead>
           <tr>
-            <th>Recommended next query</th>
-            <th>kMax</th>
-            <th>kAvg</th>
-            <th>dMax</th>
-            <th>dAvg</th>
+            <th colspan="3">Depth</th>
+            <th rowspan="2">Recommended query</th>
+          </tr>
+          <tr>
+            <th>Max</th>
+            <th>Average</th>
+            <th>Histogram</th>
           </tr>
         </thead>
         <tbody id="queries"></tbody>
-      </table>
-      <table>
-        <thead>
-          <tr><th>Candidate solutions</th></tr>
-        </thead>
-        <tbody id="candidates"></tbody>
       </table>
     </section>
     <script src="script.js"></script>

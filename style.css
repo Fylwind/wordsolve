@@ -6,7 +6,7 @@ body {
     margin: 0;
 }
 
-p, pre {
+p, pre, dl {
     margin: 8px;
 }
 
@@ -53,13 +53,21 @@ section {
     background: #ccc;
 }
 
-#result {
+#result > * {
+    margin-bottom: 10px;
 }
 
 #result table {
-    float: left;
     border: 1px solid grey;
     margin-right: 5px;
+}
+
+#result table td {
+    vertical-align: top;
+}
+
+#result table details {
+    padding: 8px;
 }
 
 #result td, #result th {

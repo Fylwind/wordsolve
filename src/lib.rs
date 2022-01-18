@@ -3,12 +3,13 @@
 
 use float_ord::FloatOrd;
 use fxhash::FxHashMap as HashMap;
-use fxhash::FxHashSet as HashSet;
 use lazy_static::lazy_static;
+use serde::{Deserialize, Serialize};
 use static_assertions::const_assert;
 use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::io::Write;
+use std::rc::Rc;
 use std::{cmp, fmt, io, str, time};
 
 #[cfg(target_arch = "wasm32")]
@@ -81,10 +82,6 @@ impl fmt::Display for Color {
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Response(u8);
 
-impl Response {
-    const MAX: Self = Self(usize::pow(Color::COUNT, NUM_CHARS as u32) as u8);
-}
-
 impl fmt::Debug for Response {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Response::try_from({:?}).unwrap()", format!("{}", self))
@@ -146,28 +143,28 @@ impl FromIterator<Color> for Response {
 }
 
 impl Response {
-    fn compute(query: &str, solution: &str) -> Self {
+    fn compute(query: &str, candidate: &str) -> Self {
         let query = word_chars(query).unwrap();
-        let solution = word_chars(solution).unwrap();
-        Self::compute_with(query, solution)
+        let candidate = word_chars(candidate).unwrap();
+        Self::compute_with(query, candidate)
     }
 
-    fn compute_with(query: [WordChar; NUM_CHARS], mut solution: [WordChar; NUM_CHARS]) -> Self {
+    fn compute_with(query: [WordChar; NUM_CHARS], mut candidate: [WordChar; NUM_CHARS]) -> Self {
         let mut color_buf = [Color::GRAY; NUM_CHARS];
-        for ((color, &query_char), solution_char) in
-            color_buf.iter_mut().zip(&query).zip(&mut solution)
+        for ((color, &query_char), candidate_char) in
+            color_buf.iter_mut().zip(&query).zip(&mut candidate)
         {
-            if query_char == *solution_char {
+            if query_char == *candidate_char {
                 *color = Color::GREEN;
-                *solution_char = WordChar::INVALID;
+                *candidate_char = WordChar::INVALID;
             }
         }
         for (color, &query_char) in color_buf.iter_mut().zip(&query) {
             if *color == Color::GRAY {
-                for solution_char in &mut solution {
-                    if query_char == *solution_char {
+                for candidate_char in &mut candidate {
+                    if query_char == *candidate_char {
                         *color = Color::YELLOW;
-                        *solution_char = WordChar::INVALID;
+                        *candidate_char = WordChar::INVALID;
                         break;
                     }
                 }
@@ -189,7 +186,7 @@ impl From<usize> for WordId {
 #[derive(Clone, Debug)]
 pub struct Matrix {
     responses: Vec<Response>,
-    num_solutions: usize,
+    num_candidates: usize,
     pub words: Vec<String>,
     pub word_ids: HashMap<String, WordId>,
 }
@@ -198,9 +195,9 @@ impl Matrix {
     pub fn build(database: &Database, progress_sink: &mut ProgressSink) -> io::Result<Self> {
         let mut responses = Vec::default();
         let words: Vec<String> = database
-            .solutions
+            .candidates
             .iter()
-            .chain(&database.nonsolutions)
+            .chain(&database.noncandidates)
             .cloned()
             .collect();
         let word_ids: HashMap<String, WordId> = words
@@ -217,8 +214,8 @@ impl Matrix {
             .iter()
             .map(|word| word_chars(word))
             .collect::<io::Result<Vec<_>>>()?;
-        let solutions: Vec<[WordChar; NUM_CHARS]> = database
-            .solutions
+        let candidates: Vec<[WordChar; NUM_CHARS]> = database
+            .candidates
             .iter()
             .map(|word| word_chars(word))
             .collect::<io::Result<Vec<_>>>()?;
@@ -226,25 +223,25 @@ impl Matrix {
         for (i, &query) in queries.iter().enumerate() {
             progress_tracker
                 .tick(&mut || (i as f64 / queries.len() as f64, format!("{}", words[i])));
-            for &solution in &solutions {
-                let response = Response::compute_with(query, solution);
+            for &candidate in &candidates {
+                let response = Response::compute_with(query, candidate);
                 responses.push(response)
             }
         }
         Ok(Self {
             responses,
-            num_solutions: database.solutions.len(),
+            num_candidates: database.candidates.len(),
             words,
             word_ids,
         })
     }
 
-    fn response(&self, query: WordId, solution: WordId) -> Response {
-        assert!((solution.0 as usize) < self.num_solutions);
-        self.responses[query.0 as usize * self.num_solutions + solution.0 as usize]
+    fn response(&self, query: WordId, candidate: WordId) -> Response {
+        assert!((candidate.0 as usize) < self.num_candidates);
+        self.responses[query.0 as usize * self.num_candidates + candidate.0 as usize]
     }
 
-    fn word(&self, WordId(i): WordId) -> &str {
+    pub fn word(&self, WordId(i): WordId) -> &str {
         &self.words[i as usize]
     }
 
@@ -263,33 +260,33 @@ impl Matrix {
 #[derive(Clone, Debug)]
 pub struct Database {
     /// Words that are valid as a solution.
-    pub solutions: Vec<String>,
+    pub candidates: Vec<String>,
     /// Words that are valid as input, but never as a solution.
-    pub nonsolutions: Vec<String>,
+    pub noncandidates: Vec<String>,
 }
 
 impl Database {
     pub fn parse(s: &str) -> io::Result<Self> {
-        let mut solutions = Vec::default();
-        let mut nonsolutions = Vec::default();
+        let mut candidates = Vec::default();
+        let mut noncandidates = Vec::default();
         for line in s.lines() {
             let word = line.trim().to_lowercase();
-            let is_nonsolution = word.starts_with("!");
+            let is_noncandidate = word.starts_with("!");
             let word = word.strip_prefix('!').unwrap_or(&word);
             let chars: Vec<char> = word.chars().collect();
             if !(chars.len() == NUM_CHARS && chars.iter().all(char::is_ascii_lowercase)) {
                 continue;
             }
-            if is_nonsolution {
-                &mut nonsolutions
+            if is_noncandidate {
+                &mut noncandidates
             } else {
-                &mut solutions
+                &mut candidates
             }
             .push(word.to_owned());
         }
         Ok(Database {
-            solutions,
-            nonsolutions,
+            candidates,
+            noncandidates,
         })
     }
 }
@@ -344,31 +341,62 @@ fn render_duration_secs(secs: f64) -> String {
     }
 }
 
-fn divide_candidates(
+fn subdivide_candidates(
     matrix: &Matrix,
     query: WordId,
     candidates: &[WordId],
-    outcomes_buf: &mut HashMap<Response, Vec<WordId>>,
-) -> Option<(f64, Vec<(Response, Vec<WordId>)>)> {
-    outcomes_buf.clear();
+) -> (f64, Vec<(Response, Vec<WordId>)>) {
+    let mut outcomes = HashMap::default();
     for &candidate in candidates {
         let response = matrix.response(query, candidate);
-        let candidates = outcomes_buf.entry(response).or_insert(Vec::default());
+        let candidates = outcomes.entry(response).or_insert(Vec::default());
         candidates.push(candidate);
     }
-    if outcomes_buf.len() <= 1 {
-        return None;
-    }
-    let mut entropy = 0.0;
-    let mut outcomes: Vec<_> = outcomes_buf.drain().collect();
+    let mut outcomes: Vec<_> = outcomes.into_iter().collect();
     outcomes
         .sort_unstable_by_key(|(response, candidates)| (cmp::Reverse(candidates.len()), *response));
     let n = candidates.len();
-    for (_, candidates) in &outcomes {
-        let p = candidates.len() as f64 / n as f64;
-        entropy += -p * f64::log2(p);
+    let entropy_remaining = outcomes
+        .iter()
+        .map(|(_, subcandidates)| {
+            let k = subcandidates.len() as f64;
+            k * f64::ln(k)
+        })
+        .sum::<f64>()
+        / n as f64;
+    (f64::exp(entropy_remaining), outcomes)
+}
+
+fn rank_queries(
+    matrix: &Matrix,
+    queries: &[WordId],
+    candidates: &[WordId],
+) -> (
+    Vec<WordId>,
+    Vec<(WordId, f64, Vec<(Response, Vec<WordId>)>)>,
+) {
+    let mut viable_queries = Vec::default();
+    assert!(candidates.len() > 1);
+    for &query in queries {
+        let response = matrix.response(query, candidates[0]);
+        for &candidate in &candidates[1..] {
+            if matrix.response(query, candidate) != response {
+                viable_queries.push(query);
+                break;
+            }
+        }
     }
-    Some((entropy, outcomes))
+    let mut query_outcomes = Vec::default();
+    for &query in &viable_queries {
+        let (k_avg, outcomes) = subdivide_candidates(matrix, query, candidates);
+        if outcomes.len() > 1 || candidates[0] == query {
+            query_outcomes.push((query, k_avg, outcomes));
+        }
+    }
+    // TODO: Prune queries that don't progress fast enough to reach depth_max
+    query_outcomes
+        .sort_by_key(|(_, k_avg, outcomes)| (outcomes.first().unwrap().1.len(), FloatOrd(*k_avg)));
+    (viable_queries, query_outcomes)
 }
 
 type ProgressSink<'a> = dyn FnMut(f64, String) + 'a;
@@ -383,7 +411,7 @@ struct ProgressTracker<'a> {
     progress_sink: &'a mut ProgressSink<'a>,
     ticks_before_render: u32,
     ticks_total: u64,
-    render_frequency: u32,
+    render_interval_ticks: u32,
     t_start: f64,
 }
 
@@ -395,7 +423,7 @@ impl<'a> ProgressTracker<'a> {
             progress_sink,
             ticks_before_render: 1,
             ticks_total: 1,
-            render_frequency: 1,
+            render_interval_ticks: 1,
             t_start: now(),
         }
     }
@@ -408,12 +436,15 @@ impl<'a> ProgressTracker<'a> {
         let (progress, message) = query_progress();
         let elapsed = now() - self.t_start;
         let remaining = elapsed * (1.0 - progress) / progress;
-        self.render_frequency = ((Self::RENDER_INTERVAL.as_secs_f64() / elapsed
+        self.render_interval_ticks = ((Self::RENDER_INTERVAL.as_secs_f64() / elapsed
             * self.ticks_total as f64) as u32)
-            .clamp(self.render_frequency / 2, self.render_frequency * 2)
+            .clamp(
+                self.render_interval_ticks / 2,
+                self.render_interval_ticks * 2,
+            )
             .clamp(1, 1000000);
-        self.ticks_before_render = self.render_frequency;
-        self.ticks_total += self.render_frequency as u64;
+        self.ticks_before_render = self.render_interval_ticks;
+        self.ticks_total += self.render_interval_ticks as u64;
         (self.progress_sink)(
             progress,
             format!(
@@ -427,51 +458,111 @@ impl<'a> ProgressTracker<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Score {
+    pub depth_max: u8,
+    pub depth_sum: u32,
+    pub num_candidates: u16,
+}
+
+impl Score {
+    const WIN: Self = Self {
+        depth_max: 0,
+        depth_sum: 0,
+        num_candidates: 1,
+    };
+
+    const LOSS: Self = Self {
+        depth_max: u8::MAX,
+        depth_sum: u32::MAX,
+        num_candidates: 0,
+    };
+
+    fn is_loss(self) -> bool {
+        self.depth_max == Self::LOSS.depth_max
+    }
+
+    fn render(self) -> Vec<String> {
+        vec![
+            format!("{}", self.depth_max),
+            format!(
+                "{:.3} ({}/{})",
+                self.depth_sum as f64 / self.num_candidates as f64,
+                self.depth_sum,
+                self.num_candidates,
+            ),
+        ]
+    }
+
+    fn ord(self) -> (cmp::Reverse<u8>, cmp::Reverse<f64>) {
+        (
+            cmp::Reverse(self.depth_max),
+            cmp::Reverse(self.depth_sum as f64 / self.num_candidates as f64),
+        )
+    }
+
+    fn add_outcome(&mut self, score: Self) {
+        self.depth_max = cmp::max(self.depth_max, score.depth_max);
+        self.depth_sum += score.depth_sum;
+        self.num_candidates += score.num_candidates;
+    }
+
+    fn ascend(mut self) -> Self {
+        self.depth_max = self.depth_max.saturating_add(1);
+        self.depth_sum = self
+            .depth_sum
+            .checked_add(self.num_candidates as u32)
+            .unwrap();
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
-struct Strategy {
-    query: WordId,
-    score: i32,
+pub struct Strategy {
+    pub query: WordId,
+    pub outcomes: Vec<(Response, Option<Rc<Strategy>>)>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Solver {
-    pub max_branching: i32,
-    pub max_depth: i32,
+    pub dk_trunc: f64,
 }
 
 impl Solver {
-    fn solve(
+    pub fn solve(
         &self,
         matrix: &Matrix,
         queries: &[WordId],
-        root_queries: &[WordId],
         candidates: &[WordId],
         progress_sink: &mut ProgressSink,
-    ) -> Strategy {
-        let mut state = SolverState::default();
-        state.cache = vec![Default::default(); self.max_depth as usize];
-        state.root_queries = root_queries.iter().copied().collect();
+    ) -> (Score, Option<Rc<Strategy>>) {
         let mut context = SolverContext {
-            state,
+            state: SolverState::default(),
             conf: self,
             matrix,
             progress_tracker: ProgressTracker::new(progress_sink),
         };
-        let strategy = context.solve(queries, candidates, 0, i32::MIN, i32::MAX);
+        let solution = context.solve(queries, candidates, u8::MAX);
         progress_sink(1.0, format!(""));
-        strategy
+        solution
     }
+}
+
+#[derive(Clone, Debug)]
+enum CachedResult {
+    AtLeastDepth(u8),
+    Solved {
+        score: Score,
+        strategy: Option<Rc<Strategy>>,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
 struct SolverState {
     path: Vec<WordId>,
-    map_buf: HashMap<Response, Vec<WordId>>,
-    cache: Vec<HashMap<Vec<WordId>, Strategy>>,
-    cache_hits: u32,
-    /// Restricts the set of queries at the root.
-    /// Does not affect its children.
-    root_queries: HashSet<WordId>,
+    // Transposition table.
+    table: HashMap<Vec<WordId>, CachedResult>,
+    table_hits: u32,
     progress: Vec<(f64, f64)>,
 }
 
@@ -488,17 +579,13 @@ impl SolverState {
         self.progress.pop();
     }
 
-    fn render_progress(&mut self, matrix: &Matrix, num_candidates: usize) -> (f64, String) {
-        (
-            tree_progress(&self.progress),
-            format!(
-                "[words={} nc={} hit={}/{}]",
-                self.render_path(matrix),
-                num_candidates,
-                self.cache_hits,
-                self.cache.iter().map(|x| x.len()).sum::<usize>(),
-            ),
-        )
+    fn render_progress(
+        &mut self,
+        matrix: &Matrix,
+        num_candidates: usize,
+        depth_limit: u8,
+    ) -> (f64, String) {
+        (tree_progress(&self.progress), self.render_path(matrix))
     }
 }
 
@@ -510,163 +597,188 @@ struct SolverContext<'a> {
 }
 
 impl<'a> SolverContext<'a> {
+    fn evaluate(
+        &mut self,
+        current_query: WordId,
+        queries: &[WordId],
+        outcomes: &[(Response, Vec<WordId>)],
+        depth_limit: u8,
+    ) -> (Score, Vec<(Response, Option<Rc<Strategy>>)>) {
+        let mut total_score = Score::default();
+        let mut strategies = Vec::default();
+        for (j, (response, candidates)) in outcomes.iter().enumerate() {
+            self.state.push_progress(j, outcomes.len());
+            let (score, strategy) = if candidates.len() == 1 && candidates[0] == current_query {
+                (Score::WIN, None)
+            } else {
+                let (score, strategy) = self.solve(queries, candidates, depth_limit);
+                (score, strategy)
+            };
+            total_score.add_outcome(score);
+            self.state.pop_progress();
+            if score.depth_max > depth_limit {
+                return (Score::LOSS, Default::default());
+            }
+            strategies.push((*response, strategy));
+        }
+        (total_score, strategies)
+    }
+
+    fn evaluate_many(
+        &mut self,
+        query_outcomes: &[(WordId, f64, Vec<(Response, Vec<WordId>)>)],
+        queries: &[WordId],
+        depth_limit: u8,
+    ) -> (Score, Option<Rc<Strategy>>) {
+        let mut depth_limit = depth_limit - 1;
+        let mut best_strategy = None;
+        let mut best_score = Score::LOSS;
+        for (i, (query, _, outcomes)) in query_outcomes.iter().enumerate() {
+            self.state.push_progress(i, query_outcomes.len());
+            let query = *query;
+            self.state.path.push(query);
+            let (score, strategies) = self.evaluate(query, &queries, outcomes, depth_limit);
+            if best_score.ord() < score.ord() {
+                best_score = score;
+                best_strategy = Some(Rc::new(Strategy {
+                    query,
+                    outcomes: strategies,
+                }));
+            }
+            depth_limit = cmp::min(depth_limit, best_score.depth_max);
+            self.state.path.pop();
+            self.state.pop_progress();
+        }
+        (best_score.ascend(), best_strategy)
+    }
+
+    // fn solve_many(
+    //     &mut self,
+    //     root_queries: &[WordId],
+    //     queries: &[WordId],
+    //     candidates: &[WordId],
+    //     depth_limit: u8,
+    // ) -> (Score, Option<Strategy>) {
+    //     let num_candidates = candidates.len();
+    //     self.progress_tracker.tick(&mut || {
+    //         self.state
+    //             .render_progress(self.matrix, num_candidates, depth_limit)
+    //     });
+    //     assert_ne!(num_candidates, 0);
+    //     if depth_limit == 0 {
+    //         return (Score::LOSS, None);
+    //     }
+    //     let (queries, query_outcomes) =
+    //         rank_queries(self.matrix, queries, candidates, &mut self.state.map_buf);
+    //     assert_ne!(query_outcomes.len(), 0);
+    //     let max_branching = self.conf.max_branching as usize;
+    //     let mut depth_limit = depth_limit - 1;
+    //     let mut best_strategy = None;
+    //     let mut best_score = Score::LOSS;
+    //     for (i, (query, _, outcomes)) in query_outcomes.iter().take(max_branching).enumerate() {
+    //         self.state
+    //             .push_progress(i, cmp::min(max_branching, query_outcomes.len()));
+    //         let query = *query;
+    //         self.state.path.push(query);
+    //         let (score, strategies) = self.evaluate(query, &queries, outcomes, depth_limit);
+    //         if best_score.ord() < score.ord() {
+    //             best_score = score;
+    //             best_strategy = Some(Strategy {
+    //                 query,
+    //                 outcomes: strategies,
+    //             });
+    //         }
+    //         depth_limit = cmp::min(depth_limit, best_score.depth_max);
+    //         self.state.path.pop();
+    //         self.state.pop_progress();
+    //     }
+    //     (best_score.ascend(), best_strategy)
+    // }
+
     fn solve(
         &mut self,
         queries: &[WordId],
         candidates: &[WordId],
-        depth: i32,
-        alpha: i32,
-        beta: i32,
-    ) -> Strategy {
+        depth_limit: u8,
+    ) -> (Score, Option<Rc<Strategy>>) {
         let num_candidates = candidates.len();
-        self.progress_tracker
-            .tick(&mut || self.state.render_progress(self.matrix, num_candidates));
-        let fallback_query = candidates[0];
-        if num_candidates <= 1 {
-            return Strategy {
-                query: fallback_query,
-                score: -depth,
-            };
-        }
-        let pessimistic_score = 1 - num_candidates as i32 - depth;
-        let optimistic_score = -ceil_log(num_candidates as i32, Response::MAX.0 as i32) - depth;
-        if depth >= self.conf.max_depth {
-            return Strategy {
-                query: fallback_query,
-                score: pessimistic_score,
-            };
-        }
-        if optimistic_score <= alpha {
-            return Strategy {
-                query: fallback_query,
-                score: pessimistic_score,
-            };
-        }
-        if pessimistic_score >= beta {
-            return Strategy {
-                query: fallback_query,
-                score: pessimistic_score,
-            };
-        }
-        if let Some(strategy) = self.state.cache[depth as usize].get(candidates) {
-            self.state.cache_hits += 1;
-            return strategy.clone();
-        }
-        let mut query_outcomes = Vec::default();
-        for query in queries {
-            let query = *query;
-            if let Some((entropy, outcomes)) =
-                divide_candidates(self.matrix, query, candidates, &mut self.state.map_buf)
-            {
-                query_outcomes.push((query, entropy, outcomes));
-            }
-        }
-        let effective_queries: Vec<WordId> =
-            query_outcomes.iter().map(|&(query, _, _)| query).collect();
-        query_outcomes.sort_by_key(|(_, entropy, outcomes)| {
-            (outcomes.first().unwrap().1.len(), FloatOrd(-*entropy))
+        self.progress_tracker.tick(&mut || {
+            self.state
+                .render_progress(self.matrix, num_candidates, depth_limit)
         });
-        if depth == 0 {
-            query_outcomes = query_outcomes
-                .into_iter()
-                .filter(|(query, _, _)| self.state.root_queries.contains(query))
-                .collect();
+        assert_ne!(num_candidates, 0);
+        if depth_limit == 0 {
+            return (Score::LOSS, None);
         }
-        let mut best_strategy = Strategy {
-            query: fallback_query,
-            score: i32::MIN,
-        };
-        let mut alpha = alpha;
-        for (i, (query, _, outcomes)) in query_outcomes
-            .iter()
-            .take(self.conf.max_branching as usize)
-            .enumerate()
-        {
-            self.state.push_progress(
-                i,
-                cmp::min(self.conf.max_branching as usize, query_outcomes.len()),
+        if candidates.len() == 1 {
+            let candidate = candidates[0];
+            return (
+                Score::WIN.ascend(),
+                Some(Rc::new(Strategy {
+                    query: candidate,
+                    outcomes: vec![(self.matrix.response(candidate, candidate), None)],
+                })),
             );
-            let query = *query;
-            self.state.path.push(query);
-            let mut worst_score = i32::MAX;
-            {
-                let mut beta = beta;
-                for (j, (_, remaining_candidates)) in outcomes.iter().enumerate() {
-                    self.state.push_progress(j, outcomes.len());
-                    let mut strategy = self.solve(
-                        &effective_queries,
-                        remaining_candidates,
-                        depth + 1,
-                        alpha,
-                        beta,
-                    );
-                    if remaining_candidates.len() == 1 && remaining_candidates[0] == query {
-                        strategy.score -= 1;
-                    }
-                    worst_score = cmp::min(worst_score, strategy.score);
-                    beta = cmp::min(beta, strategy.score);
-                    self.state.pop_progress();
-                    if beta <= alpha {
-                        break;
-                    }
+        }
+        match self.state.table.get(candidates) {
+            Some(&CachedResult::AtLeastDepth(d)) if d >= depth_limit => {
+                return {
+                    self.state.table_hits += 1;
+                    (Score::LOSS, None)
                 }
             }
-            if best_strategy.score < worst_score {
-                // IMPORTANT: Because we are short-circuiting via beta <=
-                // alpha, this has to be "<", not "<=". After finding an
-                // optimal solution, the alpha would prevent full exploration
-                // of other trees.
-                best_strategy.query = query;
-                best_strategy.score = worst_score;
+            Some(&CachedResult::Solved {
+                score,
+                ref strategy,
+            }) => {
+                return {
+                    self.state.table_hits += 1;
+                    (score, strategy.clone())
+                }
             }
-            alpha = cmp::max(alpha, worst_score);
-            self.state.path.pop();
-            self.state.pop_progress();
-            if beta <= alpha {
-                break;
-            }
+            _ => {}
         }
-        self.state.cache[depth as usize].insert(candidates.to_owned(), best_strategy.clone());
-        best_strategy
+        let (queries, query_outcomes) = rank_queries(self.matrix, queries, candidates);
+        let &(_, best_k_avg, _) = query_outcomes.first().unwrap();
+        let truncated_query_outcomes = &query_outcomes[..query_outcomes
+            .iter()
+            .position(|&(_, k_avg, _)| k_avg > best_k_avg * (1.0 + self.conf.dk_trunc))
+            .unwrap_or(query_outcomes.len())];
+        let (score, strategy) = self.evaluate_many(truncated_query_outcomes, &queries, depth_limit);
+        self.state.table.insert(
+            candidates.to_owned(),
+            if score.depth_max <= depth_limit {
+                CachedResult::Solved {
+                    score,
+                    strategy: strategy.clone(),
+                }
+            } else {
+                CachedResult::AtLeastDepth(depth_limit)
+            },
+        );
+        (score, strategy)
     }
 }
 
 #[derive(Clone, Debug, Default)]
-struct DepthStats {
+struct Stats {
     counts: Vec<usize>,
 }
 
-pub trait Log {
-    fn log(&self, message: &str);
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct StderrLog;
-
-impl Log for StderrLog {
-    fn log(&self, message: &str) {
-        if message.starts_with("\x1b[2K\r") {
-            eprint!("{}", message);
-            io::stderr().flush().expect("flush failed");
-        } else {
-            eprintln!("{}", message);
-        }
-    }
-}
-
-impl DepthStats {
-    fn add(&mut self, depth: usize) {
+impl Stats {
+    fn add_sample(&mut self, i: usize) {
         self.counts
-            .resize(cmp::max(self.counts.len(), depth + 1), Default::default());
-        self.counts[depth] += 1;
+            .resize(cmp::max(self.counts.len(), i + 1), Default::default());
+        self.counts[i] += 1;
     }
 
-    fn log_summary(&self, log: &dyn Log) {
-        let n: usize = self.counts.iter().copied().sum();
-        log.log("depth distribution:");
-        for (i, &k) in self.counts.iter().enumerate() {
-            log.log(&format!("\t{}\t{:5.1}%", i, k as f64 / n as f64 * 100.0));
-        }
+    fn average(&self) -> f64 {
+        self.counts
+            .iter()
+            .enumerate()
+            .map(|(i, &n)| i as f64 * n as f64)
+            .sum::<f64>()
+            / self.counts.iter().map(|&n| n as f64).sum::<f64>()
     }
 }
 
@@ -674,147 +786,188 @@ pub fn update_stderr_progress(progress: f64, message: String) {
     if progress == 1.0 {
         eprint!("\x1b[2K\r");
     } else {
-        eprint!("\x1b[2K\r{:6.3}% {}", progress, message);
+        eprint!("\x1b[2K\r{:6.2}% {}", progress * 100.0, message);
     }
 }
 
 impl Solver {
-    fn dump_strategy_with<'a>(
-        &self,
-        matrix: &Matrix,
-        queries: &[WordId],
-        root_queries: &[WordId],
-        candidates: &[WordId],
-        depth: usize,
-        depth_stats: &mut DepthStats,
-        mut min_expected_score: i32,
-        node_counter: usize,
-        counter: &mut usize,
-        sink: &mut dyn Write,
-    ) -> io::Result<()> {
-        let t0 = now();
-        let strategy = self.solve(
-            matrix,
-            queries,
-            root_queries,
-            candidates,
-            &mut update_stderr_progress,
-        );
-        if depth == 0 {
-            eprintln!(
-                "\nSolve time = {:?}, query = {:?}, score = {}",
-                now() - t0,
-                matrix.word(strategy.query),
-                strategy.score,
-            );
-            strategy.score;
-        }
-        assert_eq!(strategy.score == 0, candidates.len() <= 1);
-        if min_expected_score > strategy.score {
-            eprintln!(
-                "BUG: expected at least score {}, got {}",
-                min_expected_score, strategy.score,
-            );
-        }
-        min_expected_score = strategy.score;
-        if strategy.score == 0 {
-            depth_stats.add(depth);
-            return Ok(());
-        }
-        let mut outcomes = BTreeMap::default();
-        for &candidate in candidates {
-            let response = matrix.response(strategy.query, candidate);
-            outcomes
-                .entry(format!("{}", response))
-                .or_insert(Vec::default())
-                .push(candidate);
-        }
-        let base_counter = *counter;
-        *counter = base_counter + outcomes.len();
-        writeln!(
-            sink,
-            "# query = {}, depth = {}, score = {}",
-            matrix.word(strategy.query),
-            depth,
-            strategy.score,
-        )?;
-        for (i, (response, remaining_candidates)) in outcomes.iter().enumerate() {
-            writeln!(
-                sink,
-                "[{}]\t{}\t{}\t{}\t{}",
-                node_counter,
-                matrix.word(strategy.query),
-                response,
-                if remaining_candidates.len() > 1 {
-                    format!("[{}]", base_counter + i)
-                } else {
-                    format!("")
-                },
-                if remaining_candidates.len() > 1 {
-                    format!("N={}", remaining_candidates.len())
-                } else {
-                    format!("{{{}}}", matrix.words(remaining_candidates).join(", "))
-                },
-            )?;
-        }
-        for (i, remaining_candidates) in outcomes.values().enumerate() {
-            self.dump_strategy_with(
-                matrix,
-                queries,
-                queries,
-                &remaining_candidates,
-                depth + 1,
-                depth_stats,
-                min_expected_score + 1,
-                base_counter + i,
-                counter,
-                sink,
-            )?;
-        }
-        Ok(())
-    }
+    // fn dump_strategy_with<'a>(
+    //     &self,
+    //     matrix: &Matrix,
+    //     queries: &[WordId],
+    //     root_queries: &[WordId],
+    //     candidates: &[WordId],
+    //     depth: usize,
+    //     depth_stats: &mut Stats,
+    //     mut min_expected_score: i32,
+    //     node_counter: usize,
+    //     counter: &mut usize,
+    //     sink: &mut dyn Write,
+    // ) -> io::Result<()> {
+    //     let t0 = now();
+    //     let strategy = self.solve(
+    //         matrix,
+    //         queries,
+    //         root_queries,
+    //         candidates,
+    //         &mut update_stderr_progress,
+    //     );
+    //     if depth == 0 {
+    //         eprintln!(
+    //             "\nSolve time = {:?}, query = {:?}, score = {}",
+    //             now() - t0,
+    //             matrix.word(strategy.query),
+    //             strategy.score,
+    //         );
+    //         strategy.score;
+    //     }
+    //     assert_eq!(strategy.score == 0, candidates.len() <= 1);
+    //     if min_expected_score > strategy.score {
+    //         eprintln!(
+    //             "BUG: expected at least score {}, got {}",
+    //             min_expected_score, strategy.score,
+    //         );
+    //     }
+    //     min_expected_score = strategy.score;
+    //     if strategy.score == 0 {
+    //         depth_stats.add(depth);
+    //         return Ok(());
+    //     }
+    //     let mut outcomes = BTreeMap::default();
+    //     for &candidate in candidates {
+    //         let response = matrix.response(strategy.query, candidate);
+    //         outcomes
+    //             .entry(format!("{}", response))
+    //             .or_insert(Vec::default())
+    //             .push(candidate);
+    //     }
+    //     let base_counter = *counter;
+    //     *counter = base_counter + outcomes.len();
+    //     writeln!(
+    //         sink,
+    //         "# query = {}, depth = {}, score = {}",
+    //         matrix.word(strategy.query),
+    //         depth,
+    //         strategy.score,
+    //     )?;
+    //     for (i, (response, remaining_candidates)) in outcomes.iter().enumerate() {
+    //         writeln!(
+    //             sink,
+    //             "[{}]\t{}\t{}\t{}\t{}",
+    //             node_counter,
+    //             matrix.word(strategy.query),
+    //             response,
+    //             if remaining_candidates.len() > 1 {
+    //                 format!("[{}]", base_counter + i)
+    //             } else {
+    //                 format!("")
+    //             },
+    //             if remaining_candidates.len() > 1 {
+    //                 format!("N={}", remaining_candidates.len())
+    //             } else {
+    //                 format!("{{{}}}", matrix.words(remaining_candidates).join(", "))
+    //             },
+    //         )?;
+    //     }
+    //     for (i, remaining_candidates) in outcomes.values().enumerate() {
+    //         self.dump_strategy_with(
+    //             matrix,
+    //             queries,
+    //             queries,
+    //             &remaining_candidates,
+    //             depth + 1,
+    //             depth_stats,
+    //             min_expected_score + 1,
+    //             base_counter + i,
+    //             counter,
+    //             sink,
+    //         )?;
+    //     }
+    //     Ok(())
+    // }
 
-    pub fn dump_strategy(
-        &self,
-        matrix: &Matrix,
-        queries: &[WordId],
-        root_queries: &[WordId],
-        candidates: &[WordId],
-        sink: &mut dyn Write,
-    ) -> io::Result<()> {
-        let mut depth_stats = Default::default();
-        self.dump_strategy_with(
-            matrix,
-            queries,
-            root_queries,
-            candidates,
-            0,
-            &mut depth_stats,
-            i32::MIN,
-            0,
-            &mut 1,
-            sink,
-        )?;
-        depth_stats.log_summary(&StderrLog);
-        Ok(())
+    // pub fn dump_strategy(
+    //     &self,
+    //     matrix: &Matrix,
+    //     queries: &[WordId],
+    //     root_queries: &[WordId],
+    //     candidates: &[WordId],
+    //     sink: &mut dyn Write,
+    // ) -> io::Result<()> {
+    //     let mut depth_stats = Default::default();
+    //     self.dump_strategy_with(
+    //         matrix,
+    //         queries,
+    //         root_queries,
+    //         candidates,
+    //         0,
+    //         &mut depth_stats,
+    //         i32::MIN,
+    //         0,
+    //         &mut 1,
+    //         sink,
+    //     )?;
+    //     depth_stats.log_summary(&StderrLog);
+    //     Ok(())
+    // }
+}
+
+#[derive(Serialize)]
+struct Outcome {
+    response: String,
+    next_decision: Option<Decision>,
+}
+
+#[derive(Serialize)]
+struct Decision {
+    query: String,
+    outcomes: Vec<Outcome>,
+}
+
+impl Strategy {
+    fn to_decision_tree(&self, matrix: &Matrix) -> Decision {
+        Decision {
+            query: matrix.word(self.query).into(),
+            outcomes: self
+                .outcomes
+                .iter()
+                .map(|(response, next_strategy)| Outcome {
+                    response: format!("{}", response),
+                    next_decision: next_strategy
+                        .as_ref()
+                        .map(|strategy| strategy.to_decision_tree(matrix)),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl Decision {
+    fn accumulate_depth_stats(&self, depth: usize, stats: &mut Stats) {
+        for Outcome { next_decision, .. } in &self.outcomes {
+            match next_decision {
+                None => stats.add_sample(depth),
+                Some(decision) => decision.accumulate_depth_stats(depth + 1, stats),
+            }
+        }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn solve(words: &str, guesses: &str, max_branching: i32, log: &dyn Log) -> io::Result<()> {
+fn solve(words: &str, guesses: &str, num_roots: u32, dk_trunc: f64) -> io::Result<()> {
     if words.is_empty() {
         return Err(error("Please upload a word list first."));
     }
     let mut database = Database::parse(words)?;
     let guesses = parse_guesses(guesses, "\n")?;
-    database.solutions = filter_candidates(&guesses, &database.solutions);
+    database.candidates = filter_candidates(&guesses, &database.candidates);
 
-    let mut candidates = database.solutions.clone();
+    let mut candidates = database.candidates.clone();
     if candidates.is_empty() {
         return Err(error("no candidates remain"));
     }
     candidates.sort();
-    js::OutMessage::SetCandidates { candidates }.post();
+    js::Reply::SetCandidates { candidates }.post();
 
     let matrix = {
         let _timer = js::Timer::from("preprocess");
@@ -823,34 +976,30 @@ fn solve(words: &str, guesses: &str, max_branching: i32, log: &dyn Log) -> io::R
         })?
     };
 
-    let candidates: Vec<WordId> = (0..database.solutions.len())
+    let candidates: Vec<WordId> = (0..database.candidates.len())
         .map(|c| WordId(c.try_into().unwrap()))
         .collect();
     let queries: Vec<WordId> = (0..matrix.words.len()).map(From::from).collect();
 
-    let solver = Solver {
-        max_depth: 9,
-        max_branching: max_branching,
-    };
+    let solver = Solver { dk_trunc };
     js::update_progress(format!("(1/2) Solving..."), 0.0);
     {
         let _timer = js::Timer::from("solve");
-        let strategy = solver.solve(
-            &matrix,
-            &queries,
-            &queries,
-            &candidates,
-            &mut |progress, message| {
+        let (score, strategy) =
+            solver.solve(&matrix, &queries, &candidates, &mut |progress, message| {
                 js::update_progress(format!("(1/2) Solving... {}", message), progress);
-            },
-        );
-        js::OutMessage::AppendQuery {
-            query: vec![
-                matrix.word(strategy.query).into(),
-                format!("{}", strategy.score),
-            ],
+            });
+        if let Some(strategy) = strategy {
+            let decision_tree = strategy.to_decision_tree(&matrix);
+            let mut depths = Stats::default();
+            decision_tree.accumulate_depth_stats(0, &mut depths);
+            js::Reply::ReportStrategy {
+                depths: depths.counts.clone(),
+                depth_avg: depths.average(),
+                decision_tree,
+            }
+            .post();
         }
-        .post();
     }
     js::update_status(format!("(2/2) Done!"));
     Ok(())

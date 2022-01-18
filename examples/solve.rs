@@ -12,21 +12,15 @@ fn error(message: &str) -> io::Error {
 struct Args {
     #[clap(long, short = 'd', help = "word database in JSON")]
     database: PathBuf,
-    #[clap(long, short = 'o')]
-    out_strategy: PathBuf,
-    #[clap(long)]
-    exclude_nonsolutions: bool,
+    // #[clap(long, short = 'o')]
+    // out_strategy: PathBuf,
     /// Filter candidates by responses. Example: -f 'hello 01001; world 02200'
     #[clap(long, short = 'f', default_value = "")]
     filters: String,
-    #[clap(long, default_value = "1")]
-    max_branching: i32,
-    #[clap(long, default_value = "10")]
-    max_depth: i32,
+    #[clap(long, short = 'k', default_value = "1")]
+    dk_trunc: f64,
     #[clap(long)]
-    root_queries: Vec<String>,
-    #[clap(long)]
-    truncate_solutions: Option<usize>,
+    truncate_candidates: Option<usize>,
 }
 
 pub fn main() -> io::Result<()> {
@@ -34,47 +28,56 @@ pub fn main() -> io::Result<()> {
 
     let mut database = Database::parse(&fs::read_to_string(args.database)?)?;
     let guesses = wordsolve::parse_guesses(&args.filters, ";")?;
-    database.solutions = wordsolve::filter_candidates(&guesses, &database.solutions);
-    if let Some(limit) = args.truncate_solutions {
-        assert!(limit <= database.solutions.len());
-        database.solutions.resize(limit, Default::default());
+    database.candidates = wordsolve::filter_candidates(&guesses, &database.candidates);
+    if let Some(limit) = args.truncate_candidates {
+        if limit < database.candidates.len() {
+            database.candidates.resize(limit, Default::default());
+        }
     }
-    if args.exclude_nonsolutions {
-        database.nonsolutions.clear();
-    }
-    if database.solutions.is_empty() {
+    if database.candidates.is_empty() {
         return Err(error("no solution candidates remain"));
     }
-    database.solutions.sort();
-    database.nonsolutions.sort();
-    println!(
-        "nc = {}, nq = {}",
-        database.solutions.len(),
-        database.solutions.len() + database.nonsolutions.len()
-    );
+    database.candidates.sort();
+    database.noncandidates.sort();
 
     let t0 = time::Instant::now();
     let matrix = Matrix::build(&database, &mut wordsolve::update_stderr_progress)?;
     eprintln!("preprocess time = {:?}", t0.elapsed());
-    let candidates: Vec<WordId> = (0..database.solutions.len()).map(From::from).collect();
+    let candidates: Vec<WordId> = (0..database.candidates.len()).map(From::from).collect();
     let queries: Vec<WordId> = (0..matrix.words.len()).map(From::from).collect();
-    let root_queries = matrix.word_ids(&args.root_queries);
-    let root_queries = if root_queries.is_empty() {
-        &queries
-    } else {
-        &root_queries
-    };
 
     let solver = Solver {
-        max_depth: args.max_depth,
-        max_branching: args.max_branching,
+        dk_trunc: args.dk_trunc,
     };
-    let mut out_file = io::BufWriter::new(fs::File::create(&args.out_strategy)?);
+    eprintln!(
+        "nc = {}, nq = {}, {:?}",
+        database.candidates.len(),
+        database.candidates.len() + database.noncandidates.len(),
+        solver,
+    );
+    //    let mut out_file = io::BufWriter::new(fs::File::create(&args.out_strategy)?);
     eprintln!("Solving...");
     let t0 = time::Instant::now();
-    solver.dump_strategy(&matrix, &queries, root_queries, &candidates, &mut out_file)?;
+    let (score, strategy) = solver.solve(
+        &matrix,
+        &queries,
+        &candidates,
+        &mut wordsolve::update_stderr_progress,
+    );
     eprint!("\x1b[2K\r");
-    eprintln!("solve time = {:?}", t0.elapsed());
+    eprintln!("\x1b[35mSOLVE TIME = {:?}\x1b[0m", t0.elapsed());
+    eprintln!("===\nWORD\tD_MAX\tD_AVG");
+    eprintln!(
+        "{}\t{}\t{}\t{}/{}",
+        match strategy {
+            Some(strategy) => matrix.word(strategy.query),
+            None => "?????",
+        },
+        score.depth_max,
+        score.depth_sum as f64 / score.num_candidates as f64,
+        score.depth_sum,
+        score.num_candidates,
+    );
 
     Ok(())
 }

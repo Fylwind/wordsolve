@@ -1,0 +1,52 @@
+----------------------------------------
+
+cargo run --release --example solve -- -d wordle.txt -k 0.3 >/dev/shm/wlog
+
+cargo flamegraph -o ~/windows/flamegraph.svg --example solve -- -d wordle.txt -k 0.3
+
+----------------------------------------
+
+Ideas:
+
+- Is iterative deepening worthwhile?
+- Null window searches?
+- We still haven't taken into account the remaining entropy (candidate size)
+
+----------------------------------------
+
+$ cargo flamegraph -o ~/windows/flamegraph.svg --example solve -- -d wordle.txt -k $k
+
+nc = 2315, nq = 2315, Solver { k_cutoff: 0.2 }
+Solving...
+SOLVE TIME = 2.823224676s
+===
+WORD	D_MAX	D_AVG
+raise	5	3.520086393088553	8149/2315
+
+nc = 2315, nq = 2315, Solver { k_cutoff: 0.25 }
+Solving...
+SOLVE TIME = 10.372610612s
+===
+WORD	D_MAX	D_AVG
+alone	5	3.5153347732181426	8138/2315
+
+nc = 2315, nq = 2315, Solver { k_cutoff: 0.3 }
+Solving...
+SOLVE TIME = 12.88367473s
+===
+WORD	D_MAX	D_AVG
+alone	5	3.5123110151187906	8131/2315
+
+nc = 2315, nq = 2315, Solver { k_cutoff: 0.35 }
+Solving...
+SOLVE TIME = 14.192749331s
+===
+WORD	D_MAX	D_AVG
+alone	5	3.5110151187904965	8128/2315
+
+nc = 2315, nq = 2315, Solver { k_cutoff: 0.5 }
+Solving...
+SOLVE TIME = 139.798292055s
+===
+WORD	D_MAX	D_AVG
+slate	5	3.4561555075593953	8001/2315
