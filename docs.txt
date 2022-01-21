@@ -12,6 +12,10 @@ Ideas:
 - Null window searches?
 - We still haven't taken into account the remaining entropy (candidate size)
 
+Failed ideas:
+
+- We can't truncate using depth_sum (at least not easily), because we might discard a solution that actually has a better depth_max but worse depth_sum :(
+
 ----------------------------------------
 
 $ cargo flamegraph -o ~/windows/flamegraph.svg --example solve -- -d wordle.txt -k $k
@@ -47,6 +51,80 @@ alone	5	3.5110151187904965	8128/2315
 nc = 2315, nq = 2315, Solver { k_cutoff: 0.5 }
 Solving...
 SOLVE TIME = 139.798292055s
+===
+WORD	D_MAX	D_AVG
+slate	5	3.4561555075593953	8001/2315
+
+nc = 2315, nq = 12972, Solver { dk_trunc: 0.1 }
+Solving...
+SOLVE TIME = 9.602084306s
+===
+WORD	D_MAX	D_AVG
+raise	5	3.487257019438445	8073/2315
+
+>> Add shortcircuiting in the subdivide_candidates loop when optimal
+
+nc = 2315, nq = 12972, Solver { dk_trunc: 0.1 }
+Solving...
+SOLVE TIME = 6.894817793s
+===
+WORD	D_MAX	D_AVG
+
+>> Then, merge the viable_queries loop into the subdivide_candidates loop
+
+nc = 2315, nq = 12972, Solver { dk_trunc: 0.1 }
+Solving...
+SOLVE TIME = 4.481001841s
+===
+WORD	D_MAX	D_AVG
+raise	5	3.487257019438445	8073/2315
+
+nc = 2315, nq = 2315, Solver { dk_trunc: 0.5 }
+Solving...
+SOLVE TIME = 74.261754902s
+===
+WORD	D_MAX	D_AVG
+slate	5	3.4561555075593953	8001/2315
+
+>> small candidates optimization via the chain(prefix,queries)
+
+nc = 2315, nq = 2315, Solver { dk_trunc: 0.5 }
+Solving...
+SOLVE TIME = 47.685331932s
+===
+WORD	D_MAX	D_AVG
+slate	5	3.4561555075593953	8001/2315
+
+>> SmallVec<[WordId; 4]> optimization within each outcome set
+
+nc = 2315, nq = 2315, Solver { dk_trunc: 0.5 }
+Solving...
+SOLVE TIME = 40.666616011s
+===
+WORD	D_MAX	D_AVG
+slate	5	3.4561555075593953	8001/2315
+
+>> SmallVec<[WordId; 8]>
+
+nc = 2315, nq = 2315, Solver { dk_trunc: 0.5 }
+Solving...
+SOLVE TIME = 36.560351827s
+===
+WORD	D_MAX	D_AVG
+slate	5	3.4561555075593953	8001/2315
+
+nc = 2315, nq = 2315, Solver { dk_trunc: 0.8 }
+Solving...
+SOLVE TIME = 159.919296112s
+===
+WORD	D_MAX	D_AVG
+slate	5	3.4518358531317497	7991/2315
+
+>> Sort query_outcomes unstably
+
+nc = 2315, nq = 2315, Solver { dk_trunc: 0.5 }
+Solving...
+SOLVE TIME = 36.865422395s
 ===
 WORD	D_MAX	D_AVG
 slate	5	3.4561555075593953	8001/2315

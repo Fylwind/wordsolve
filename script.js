@@ -160,7 +160,7 @@ function loadSolver(runner, statusBar, wordList) {
         const row = [
             `${depths.length - 1}`,
             `${depth_avg.toFixed(6)}`,
-            `[${depths.join(", ")}]`,
+            `[${depths.slice(1).join(", ")}]`,
             [renderDecisionTree(decision_tree)],
         ];
         appendTableRow(queriesTable, row);

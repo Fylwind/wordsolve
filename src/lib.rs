@@ -5,6 +5,7 @@ use float_ord::FloatOrd;
 use fxhash::FxHashMap as HashMap;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use static_assertions::const_assert;
 use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
@@ -341,18 +342,22 @@ fn render_duration_secs(secs: f64) -> String {
     }
 }
 
+type Outcomes = Vec<(Response, SmallVec<[WordId; 8]>)>;
+
 fn subdivide_candidates(
     matrix: &Matrix,
     query: WordId,
     candidates: &[WordId],
-) -> (f64, Vec<(Response, Vec<WordId>)>) {
+) -> (f64, Outcomes, bool) {
     let mut outcomes = HashMap::default();
+    let mut has_exact = false;
     for &candidate in candidates {
+        has_exact |= candidate == query;
         let response = matrix.response(query, candidate);
-        let candidates = outcomes.entry(response).or_insert(Vec::default());
+        let candidates = outcomes.entry(response).or_insert(SmallVec::default());
         candidates.push(candidate);
     }
-    let mut outcomes: Vec<_> = outcomes.into_iter().collect();
+    let mut outcomes: Outcomes = outcomes.into_iter().collect();
     outcomes
         .sort_unstable_by_key(|(response, candidates)| (cmp::Reverse(candidates.len()), *response));
     let n = candidates.len();
@@ -364,38 +369,55 @@ fn subdivide_candidates(
         })
         .sum::<f64>()
         / n as f64;
-    (f64::exp(entropy_remaining), outcomes)
+    (f64::exp(entropy_remaining), outcomes, has_exact)
 }
 
 fn rank_queries(
     matrix: &Matrix,
     queries: &[WordId],
     candidates: &[WordId],
-) -> (
-    Vec<WordId>,
-    Vec<(WordId, f64, Vec<(Response, Vec<WordId>)>)>,
-) {
+) -> (Vec<WordId>, Vec<(WordId, f64, Outcomes)>) {
     let mut viable_queries = Vec::default();
     assert!(candidates.len() > 1);
-    for &query in queries {
+    let mut query_outcomes = Vec::default();
+    let mut num_has_exacts: u32 = 0;
+    let prefix = if candidates.len() <= 4 {
+        candidates
+    } else {
+        &[]
+    };
+    for (i, &query) in prefix.into_iter().chain(queries).enumerate() {
+        if i >= prefix.len() && prefix.contains(&query) {
+            continue;
+        }
         let response = matrix.response(query, candidates[0]);
+        let mut viable = false;
         for &candidate in &candidates[1..] {
             if matrix.response(query, candidate) != response {
                 viable_queries.push(query);
+                viable = true;
                 break;
             }
         }
-    }
-    let mut query_outcomes = Vec::default();
-    for &query in &viable_queries {
-        let (k_avg, outcomes) = subdivide_candidates(matrix, query, candidates);
-        if outcomes.len() > 1 || candidates[0] == query {
+        if !viable {
+            continue;
+        }
+        let (k_avg, outcomes, has_exact) = subdivide_candidates(matrix, query, candidates);
+        let num_outcomes = outcomes.len();
+        num_has_exacts += has_exact as u32;
+        if num_outcomes > 1 || candidates[0] == query {
             query_outcomes.push((query, k_avg, outcomes));
+            if num_outcomes == candidates.len()
+                && (num_has_exacts >= candidates.len() as u32 || has_exact)
+            {
+                break; // This query is optimal
+            }
         }
     }
     // TODO: Prune queries that don't progress fast enough to reach depth_max
-    query_outcomes
-        .sort_by_key(|(_, k_avg, outcomes)| (outcomes.first().unwrap().1.len(), FloatOrd(*k_avg)));
+    query_outcomes.sort_unstable_by_key(|(query, k_avg, outcomes)| {
+        (outcomes.first().unwrap().1.len(), FloatOrd(*k_avg), *query)
+    });
     (viable_queries, query_outcomes)
 }
 
@@ -482,7 +504,7 @@ impl Score {
         self.depth_max == Self::LOSS.depth_max
     }
 
-    fn render(self) -> Vec<String> {
+    pub fn render(self) -> Vec<String> {
         vec![
             format!("{}", self.depth_max),
             format!(
@@ -550,7 +572,7 @@ impl Solver {
 
 #[derive(Clone, Debug)]
 enum CachedResult {
-    AtLeastDepth(u8),
+    DepthExceeds(u8),
     Solved {
         score: Score,
         strategy: Option<Rc<Strategy>>,
@@ -579,12 +601,7 @@ impl SolverState {
         self.progress.pop();
     }
 
-    fn render_progress(
-        &mut self,
-        matrix: &Matrix,
-        num_candidates: usize,
-        depth_limit: u8,
-    ) -> (f64, String) {
+    fn render_progress(&mut self, matrix: &Matrix) -> (f64, String) {
         (tree_progress(&self.progress), self.render_path(matrix))
     }
 }
@@ -601,13 +618,15 @@ impl<'a> SolverContext<'a> {
         &mut self,
         current_query: WordId,
         queries: &[WordId],
-        outcomes: &[(Response, Vec<WordId>)],
+        outcomes: &Outcomes,
         depth_limit: u8,
     ) -> (Score, Vec<(Response, Option<Rc<Strategy>>)>) {
         let mut total_score = Score::default();
         let mut strategies = Vec::default();
+        let num_outcomes = outcomes.len();
         for (j, (response, candidates)) in outcomes.iter().enumerate() {
-            self.state.push_progress(j, outcomes.len());
+            self.state.push_progress(j, num_outcomes);
+            let min_remaining_depth_sum = (num_outcomes).saturating_sub(j + 2) as u32;
             let (score, strategy) = if candidates.len() == 1 && candidates[0] == current_query {
                 (Score::WIN, None)
             } else {
@@ -626,8 +645,9 @@ impl<'a> SolverContext<'a> {
 
     fn evaluate_many(
         &mut self,
-        query_outcomes: &[(WordId, f64, Vec<(Response, Vec<WordId>)>)],
+        query_outcomes: &[(WordId, f64, Outcomes)],
         queries: &[WordId],
+        num_candidates: usize,
         depth_limit: u8,
     ) -> (Score, Option<Rc<Strategy>>) {
         let mut depth_limit = depth_limit - 1;
@@ -645,55 +665,12 @@ impl<'a> SolverContext<'a> {
                     outcomes: strategies,
                 }));
             }
-            depth_limit = cmp::min(depth_limit, best_score.depth_max);
+            depth_limit = best_score.depth_max;
             self.state.path.pop();
             self.state.pop_progress();
         }
         (best_score.ascend(), best_strategy)
     }
-
-    // fn solve_many(
-    //     &mut self,
-    //     root_queries: &[WordId],
-    //     queries: &[WordId],
-    //     candidates: &[WordId],
-    //     depth_limit: u8,
-    // ) -> (Score, Option<Strategy>) {
-    //     let num_candidates = candidates.len();
-    //     self.progress_tracker.tick(&mut || {
-    //         self.state
-    //             .render_progress(self.matrix, num_candidates, depth_limit)
-    //     });
-    //     assert_ne!(num_candidates, 0);
-    //     if depth_limit == 0 {
-    //         return (Score::LOSS, None);
-    //     }
-    //     let (queries, query_outcomes) =
-    //         rank_queries(self.matrix, queries, candidates, &mut self.state.map_buf);
-    //     assert_ne!(query_outcomes.len(), 0);
-    //     let max_branching = self.conf.max_branching as usize;
-    //     let mut depth_limit = depth_limit - 1;
-    //     let mut best_strategy = None;
-    //     let mut best_score = Score::LOSS;
-    //     for (i, (query, _, outcomes)) in query_outcomes.iter().take(max_branching).enumerate() {
-    //         self.state
-    //             .push_progress(i, cmp::min(max_branching, query_outcomes.len()));
-    //         let query = *query;
-    //         self.state.path.push(query);
-    //         let (score, strategies) = self.evaluate(query, &queries, outcomes, depth_limit);
-    //         if best_score.ord() < score.ord() {
-    //             best_score = score;
-    //             best_strategy = Some(Strategy {
-    //                 query,
-    //                 outcomes: strategies,
-    //             });
-    //         }
-    //         depth_limit = cmp::min(depth_limit, best_score.depth_max);
-    //         self.state.path.pop();
-    //         self.state.pop_progress();
-    //     }
-    //     (best_score.ascend(), best_strategy)
-    // }
 
     fn solve(
         &mut self,
@@ -702,10 +679,8 @@ impl<'a> SolverContext<'a> {
         depth_limit: u8,
     ) -> (Score, Option<Rc<Strategy>>) {
         let num_candidates = candidates.len();
-        self.progress_tracker.tick(&mut || {
-            self.state
-                .render_progress(self.matrix, num_candidates, depth_limit)
-        });
+        self.progress_tracker
+            .tick(&mut || self.state.render_progress(self.matrix));
         assert_ne!(num_candidates, 0);
         if depth_limit == 0 {
             return (Score::LOSS, None);
@@ -721,7 +696,7 @@ impl<'a> SolverContext<'a> {
             );
         }
         match self.state.table.get(candidates) {
-            Some(&CachedResult::AtLeastDepth(d)) if d >= depth_limit => {
+            Some(&CachedResult::DepthExceeds(d)) if d >= depth_limit => {
                 return {
                     self.state.table_hits += 1;
                     (Score::LOSS, None)
@@ -744,16 +719,21 @@ impl<'a> SolverContext<'a> {
             .iter()
             .position(|&(_, k_avg, _)| k_avg > best_k_avg * (1.0 + self.conf.dk_trunc))
             .unwrap_or(query_outcomes.len())];
-        let (score, strategy) = self.evaluate_many(truncated_query_outcomes, &queries, depth_limit);
+        let (score, strategy) = self.evaluate_many(
+            truncated_query_outcomes,
+            &queries,
+            num_candidates,
+            depth_limit,
+        );
         self.state.table.insert(
             candidates.to_owned(),
-            if score.depth_max <= depth_limit {
+            if score.depth_max > depth_limit {
+                CachedResult::DepthExceeds(depth_limit)
+            } else {
                 CachedResult::Solved {
                     score,
                     strategy: strategy.clone(),
                 }
-            } else {
-                CachedResult::AtLeastDepth(depth_limit)
             },
         );
         (score, strategy)
@@ -992,7 +972,7 @@ fn solve(words: &str, guesses: &str, num_roots: u32, dk_trunc: f64) -> io::Resul
         if let Some(strategy) = strategy {
             let decision_tree = strategy.to_decision_tree(&matrix);
             let mut depths = Stats::default();
-            decision_tree.accumulate_depth_stats(0, &mut depths);
+            decision_tree.accumulate_depth_stats(1, &mut depths);
             js::Reply::ReportStrategy {
                 depths: depths.counts.clone(),
                 depth_avg: depths.average(),
