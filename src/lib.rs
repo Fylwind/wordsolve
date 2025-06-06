@@ -360,15 +360,36 @@ fn subdivide_candidates(
     let mut outcomes: Outcomes = outcomes.into_iter().collect();
     outcomes
         .sort_unstable_by_key(|(response, candidates)| (cmp::Reverse(candidates.len()), *response));
-    let n = candidates.len();
+
+    // entropy_remaining quantifies is the expected information needed to
+    // identify the correct word after partitioning subcandidates by outcomes.
+    //
+    // We assume the following joint probability distribution:
+    //
+    //     Pr(word, outcome) = {
+    //       1 / n,   if word is in the subcandidates of outcome;
+    //       0,       otherwise;
+    //     }
+    //
+    // entropy_remaining can be derived from the conditional entropy:
+    //
+    //     H(Word | Outcome)
+    //       = -SUM[word, outcome] Pr(word, outcome) ln(Pr(word | outcome))
+    //       = -SUM[outcome] (k[outcome] / n) ln(1 / k[outcome])
+    //       = SUM[outcome] k[outcome] ln(k[outcome]) / n
+    //
+    // This can also be interpreted as the expectation over all outcomes of
+    // the entropy of each subcandidate set (i.e. ln(k[outcome])).
+    let n = candidates.len(); // Number of words.
     let entropy_remaining = outcomes
         .iter()
         .map(|(_, subcandidates)| {
-            let k = subcandidates.len() as f64;
+            let k = subcandidates.len() as f64; // Number of subcandidates.
             k * f64::ln(k)
         })
         .sum::<f64>()
         / n as f64;
+
     (f64::exp(entropy_remaining), outcomes, has_exact)
 }
 
